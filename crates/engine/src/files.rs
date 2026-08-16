@@ -25,6 +25,7 @@ pub fn file_upload(
     db: &mut dyn Database,
     store: &dyn ObjectStore,
     board_id: &str,
+    table: &str,
     filename: &str,
     content_type: &str,
     bytes: &[u8],
@@ -47,10 +48,10 @@ pub fn file_upload(
     }
     let principal =
         Principal { id: board_id.to_string(), role: "owner".to_string(), scope: None, writer: None };
-    crate::crud::record_insert(db, board_id, payload, None, false, &principal)
+    crate::crud::record_insert(db, board_id, table, payload, None, false, &principal)
 }
 
-fn content_type_for(db: &dyn Database, board_id: &str, file: &str) -> anyhow::Result<String> {
+fn content_type_for(db: &dyn Database, board_id: &str, table: &str, file: &str) -> anyhow::Result<String> {
     let q = Query {
         filter: SrvFilter {
             conds: vec![
@@ -58,6 +59,11 @@ fn content_type_for(db: &dyn Database, board_id: &str, file: &str) -> anyhow::Re
                     field: "$.board_id".to_string(),
                     op: Op::Eq,
                     value: Json::String(board_id.to_string()),
+                },
+                FilterCond {
+                    field: "$.table".to_string(),
+                    op: Op::Eq,
+                    value: Json::String(table.to_string()),
                 },
                 FilterCond {
                     field: "$.payload.file".to_string(),
@@ -86,6 +92,7 @@ pub fn file_download(
     db: &dyn Database,
     store: &dyn ObjectStore,
     board_id: &str,
+    table: &str,
     file: &str,
 ) -> anyhow::Result<Option<(Vec<u8>, String)>> {
     let prefix = format!("{board_id}/files/");
@@ -95,7 +102,7 @@ pub fn file_download(
     let Some(bytes) = store.get(file)? else {
         return Ok(None);
     };
-    let content_type = content_type_for(db, board_id, file)?;
+    let content_type = content_type_for(db, board_id, table, file)?;
     Ok(Some((bytes, content_type)))
 }
 

@@ -145,15 +145,21 @@ pub fn recipe_enabled(db: &mut dyn Database, board_id: &str, name: &str, enabled
     Ok(())
 }
 
-pub fn dispatch(
+ pub fn dispatch(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     event: EventKind,
     seq: Option<i64>,
     payload: Option<Json>,
 ) -> anyhow::Result<()> {
     let payload = payload.unwrap_or(Json::Null);
     for recipe in recipe_list(db, board_id)? {
+        if let Some(rt) = recipe.table.as_deref() {
+            if rt != table {
+                continue;
+            }
+        }
         if !recipe.enabled || !trigger_matches(&recipe.when_json, event) || !conditions_pass(&recipe.when_json, &payload) {
             continue;
         }
@@ -167,10 +173,10 @@ pub fn dispatch(
         }
         let mut working = payload.clone();
         let mut logs: Vec<String> = Vec::new();
-        let _ = run_actions(db, board_id, &recipe, &mut working, &mut logs);
+        let _ = run_actions(db, board_id, table, &recipe, &mut working, &mut logs);
         let _ = recipe_dedup_mark(&mut *db, board_id, &recipe, &payload);
         if working != payload && seq.is_some() && matches!(event, EventKind::Created | EventKind::Updated) {
-            let _ = crate::crud::record_set_raw(&mut *db, board_id, seq.unwrap(), working);
+            let _ = crate::crud::record_set_raw(&mut *db, board_id, table, seq.unwrap(), working);
         }
     }
     Ok(())
@@ -203,7 +209,8 @@ pub fn dispatch_cron(
         }
         let mut working = Json::Null;
         let mut logs: Vec<String> = Vec::new();
-        let _ = run_actions(db, board_id, &recipe, &mut working, &mut logs);
+        let table = recipe.table.as_deref().unwrap_or("records");
+        let _ = run_actions(db, board_id, table, &recipe, &mut working, &mut logs);
         let _ = recipe_dedup_mark(&mut *db, board_id, &recipe, &Json::Null);
     }
     Ok(())
@@ -344,6 +351,7 @@ fn subst_strings(v: &mut Json, payload: &Json) -> anyhow::Result<()> {
 fn run_actions(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     recipe: &Recipe,
     payload: &mut Json,
     logs: &mut Vec<String>,
@@ -363,7 +371,7 @@ fn run_actions(
                 continue;
             }
         }
-        match apply_action(db, board_id, key, val, payload, logs) {
+        match apply_action(db, board_id, table, key, val, payload, logs) {
             Ok(()) => n += 1,
             Err(e) => {
                 logs.push(format!("{key}: {e}"));
@@ -381,6 +389,7 @@ fn str_field<'a>(obj: &'a serde_json::Map<String, Json>, name: &str) -> anyhow::
 fn apply_action(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     key: &str,
     val: &Json,
     payload: &mut Json,
@@ -420,26 +429,29 @@ fn apply_action(
         "$upsert_other" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$upsert_other must be an object"))?;
             let board = obj.get("board").and_then(|v| v.as_str()).unwrap_or(board_id);
+            let tbl = obj.get("table").and_then(|v| v.as_str()).unwrap_or(table);
             let mut p = obj.get("payload").cloned().unwrap_or(Json::Object(serde_json::Map::new()));
             subst_strings(&mut p, payload)?;
             let principal = Principal { id: board_id.to_string(), role: "owner".to_string(), scope: None, writer: None };
-            crate::crud::record_insert(db, board, p, Some(&format!("recipe:{board_id}")), true, &principal)?;
+            crate::crud::record_insert(db, board, tbl, p, Some(&format!("recipe:{board_id}")), true, &principal)?;
         }
         "$patch_other" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$patch_other must be an object"))?;
             let board = obj.get("board").and_then(|v| v.as_str()).unwrap_or(board_id);
+            let tbl = obj.get("table").and_then(|v| v.as_str()).unwrap_or(table);
             let filter = obj.get("filter").ok_or_else(|| anyhow::anyhow!("$patch_other needs \"filter\""))?;
             let patch = obj.get("patch").ok_or_else(|| anyhow::anyhow!("$patch_other needs \"patch\""))?;
-            crate::crud::record_patch_first_raw(db, board, &crate::storage::ir::parse_filter(filter)?, patch)?;
+            crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(filter)?, patch)?;
         }
         "$transaction" => {
             let steps = val.as_array().ok_or_else(|| anyhow::anyhow!("$transaction must be an array"))?;
             for step in steps {
                 let map = step.as_object().ok_or_else(|| anyhow::anyhow!("$transaction step must be an object"))?;
                 let board = map.get("board").and_then(|v| v.as_str()).unwrap_or(board_id);
+                let tbl = map.get("table").and_then(|v| v.as_str()).unwrap_or(table);
                 let filter = map.get("filter").ok_or_else(|| anyhow::anyhow!("$transaction step needs \"filter\""))?;
                 let patch = map.get("patch").ok_or_else(|| anyhow::anyhow!("$transaction step needs \"patch\""))?;
-                crate::crud::record_patch_first_raw(db, board, &crate::storage::ir::parse_filter(filter)?, patch)?;
+                crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(filter)?, patch)?;
             }
         }
         "$call" | "$notify" => {

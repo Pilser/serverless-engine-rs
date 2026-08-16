@@ -3,6 +3,7 @@ pub mod files;
 pub mod jobs;
 pub mod recipes;
 pub mod records;
+pub mod tables;
 
 use engine::model::Principal;
 use engine::registry::CommandSpec;
@@ -29,6 +30,9 @@ pub fn run(
         "records.search" => records::search(engine, principal, arguments),
         "records.delete" => records::delete(engine, principal, arguments),
         "records.import" => records::import_records(engine, principal, arguments),
+        "tables.create" => tables::create(engine, principal, arguments),
+        "tables.list" => tables::list(engine, principal, arguments),
+        "tables.delete" => tables::delete(engine, principal, arguments),
         "recipes.list" => recipes::list(engine, principal, arguments),
         "recipes.add" => recipes::add(engine, principal, arguments),
         "files.list" => files::list(engine, principal, arguments),

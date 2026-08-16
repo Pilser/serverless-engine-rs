@@ -9,13 +9,14 @@ pub fn submit(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let payload = arguments
         .get("payload")
         .cloned()
         .ok_or_else(|| "missing argument 'payload'".to_string())?;
     let upsert = arguments.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
     let seq = engine
-        .insert_record(board, payload, Some(&principal.id), upsert, principal)
+        .insert_record(&board, &table, payload, Some(&principal.id), upsert, principal)
         .map_err(|e| e.to_string())?;
     ok(json!({ "seq": seq }))
 }
@@ -26,6 +27,7 @@ pub fn import_records(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let format = arguments.get("format").and_then(|f| f.as_str()).unwrap_or("json").to_string();
     let data = arg_str(arguments, "data")?;
     let separator = arguments
@@ -35,7 +37,7 @@ pub fn import_records(
         .unwrap_or(',');
     let upsert = arguments.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
     let report = engine
-        .import_records(&board, &format, &data, separator, upsert, principal)
+        .import_records(&board, &table, &format, &data, separator, upsert, principal)
         .map_err(|e| e.to_string())?;
     ok(report)
 }
@@ -46,9 +48,10 @@ pub fn get(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let seq = arg_i64(arguments, "seq", 0);
     let record = engine
-        .get_record(board, seq)
+        .get_record(&board, &table, seq)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("record {seq} not found"))?;
     ok(serde_json::to_value(&record).map_err(|e| e.to_string())?)
@@ -60,10 +63,11 @@ pub fn list(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
     let records = engine
-        .list_records(board, limit, None, offset)
+        .list_records(&board, &table, limit, None, offset)
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
@@ -78,6 +82,7 @@ pub fn query(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
     let filter_json = arguments.get("filter").cloned().unwrap_or(Json::Null);
@@ -95,7 +100,7 @@ pub fn query(
         })
         .unwrap_or_default();
     let records = engine
-        .query_records(board, &filter, &orders, limit, offset)
+        .query_records(&board, &table, &filter, &orders, limit, offset)
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
@@ -110,11 +115,12 @@ pub fn search(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let q = arg_str(arguments, "q")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
     let records = engine
-        .search_records(board, q, &engine::storage::ir::SrvFilter::new(), limit, offset, false)
+        .search_records(&board, &table, &q, &engine::storage::ir::SrvFilter::new(), limit, offset, false)
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
@@ -129,9 +135,10 @@ pub fn delete(
     arguments: &Json,
 ) -> Result<Json, String> {
     let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
     let seq = arg_i64(arguments, "seq", 0);
     engine
-        .delete_record(board, seq)
+        .delete_record(&board, &table, seq)
         .map_err(|e| e.to_string())?;
     ok(json!({ "seq": seq, "deleted": true }))
 }

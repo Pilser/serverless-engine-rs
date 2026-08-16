@@ -1,7 +1,7 @@
-use crate::model::{Board, Key, Link, Record};
+use crate::model::{Board, Key, Link, Record, TableConfig};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
-use crate::tables::{TABLE_APPS, TABLE_LINKS, TABLE_RECORDS};
+use crate::tables::{scoped_key, TABLE_APPS, TABLE_LINKS, TABLE_RECORDS, TABLE_TABLES};
 use serde_json::{json, Value as Json};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -15,6 +15,11 @@ fn save_board(db: &mut dyn Database, board: &Board) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn save_table(db: &mut dyn Database, cfg: &TableConfig) -> anyhow::Result<()> {
+    db.update(TABLE_TABLES, &Key::text(scoped_key(&cfg.board_id, &cfg.table)), &serde_json::to_value(cfg)?)?;
+    Ok(())
+}
+
 fn board_cond(board_id: &str) -> FilterCond {
     FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: Json::String(board_id.to_string()) }
 }
@@ -25,18 +30,18 @@ pub fn rate_set(db: &mut dyn Database, board_id: &str, rate: &Json) -> anyhow::R
     save_board(db, &board)
 }
 
-pub fn ttl_set(db: &mut dyn Database, board_id: &str, seconds: Option<i64>, field: Option<&str>) -> anyhow::Result<()> {
-    let mut board = crate::crud::load_board(db, board_id)?;
-    board.ttl_seconds = seconds;
-    board.ttl_field = field.map(String::from).filter(|f| !f.is_empty());
-    save_board(db, &board)
+pub fn ttl_set(db: &mut dyn Database, board_id: &str, table: &str, seconds: Option<i64>, field: Option<&str>) -> anyhow::Result<()> {
+    let mut cfg = crate::crud::load_table(db, board_id, table)?;
+    cfg.ttl_seconds = seconds;
+    cfg.ttl_field = field.map(String::from).filter(|f| !f.is_empty());
+    save_table(db, &cfg)
 }
 
-pub fn ttl_clear(db: &mut dyn Database, board_id: &str) -> anyhow::Result<()> {
-    let mut board = crate::crud::load_board(db, board_id)?;
-    board.ttl_seconds = None;
-    board.ttl_field = None;
-    save_board(db, &board)
+pub fn ttl_clear(db: &mut dyn Database, board_id: &str, table: &str) -> anyhow::Result<()> {
+    let mut cfg = crate::crud::load_table(db, board_id, table)?;
+    cfg.ttl_seconds = None;
+    cfg.ttl_field = None;
+    save_table(db, &cfg)
 }
 
 fn all_boards(db: &dyn Database) -> anyhow::Result<Vec<Board>> {
@@ -52,43 +57,53 @@ pub fn ttl_sweep(db: &mut dyn Database) -> anyhow::Result<usize> {
     let now = crate::crud::now_str();
     let mut total = 0usize;
     for board in all_boards(db)? {
-        if board.ttl_seconds.is_none() && board.ttl_field.is_none() {
-            continue;
-        }
-        let q = Query { filter: SrvFilter { conds: vec![board_cond(&board.board_id)] }, orders: vec![], limit: usize::MAX, offset: 0, ttl: None };
-        let mut dead: Vec<i64> = Vec::new();
-        for row in db.query(TABLE_RECORDS, &q)?.rows {
-            let rec: Record = serde_json::from_value(row.data)?;
-            let created = rec.created_at.as_deref().unwrap_or("");
-            if crate::crud::is_ttl_dead(&board, created, &rec.payload, &now) {
-                dead.push(rec.seq);
+        for cfg in crate::crud::table_list(db, &board.board_id)? {
+            if cfg.ttl_seconds.is_none() && cfg.ttl_field.is_none() {
+                continue;
             }
+            let q = Query {
+                filter: SrvFilter {
+                    conds: vec![board_cond(&board.board_id), crate::crud::table_cond(&cfg.table)],
+                },
+                orders: vec![],
+                limit: usize::MAX,
+                offset: 0,
+                ttl: None,
+            };
+            let mut dead: Vec<i64> = Vec::new();
+            for row in db.query(TABLE_RECORDS, &q)?.rows {
+                let rec: Record = serde_json::from_value(row.data)?;
+                let created = rec.created_at.as_deref().unwrap_or("");
+                if crate::crud::is_ttl_dead(&cfg, created, &rec.payload, &now) {
+                    dead.push(rec.seq);
+                }
+            }
+            if dead.is_empty() {
+                continue;
+            }
+            let filter = SrvFilter {
+                conds: vec![
+                    board_cond(&board.board_id),
+                    crate::crud::table_cond(&cfg.table),
+                    FilterCond { field: "$.seq".to_string(), op: Op::In, value: Json::Array(dead.into_iter().map(Json::from).collect()) },
+                ],
+            };
+            total += db.delete(TABLE_RECORDS, &filter)?;
         }
-        if dead.is_empty() {
-            continue;
-        }
-        let filter = SrvFilter {
-            conds: vec![
-                board_cond(&board.board_id),
-                FilterCond { field: "$.seq".to_string(), op: Op::In, value: Json::Array(dead.into_iter().map(Json::from).collect()) },
-            ],
-        };
-        total += db.delete(TABLE_RECORDS, &filter)?;
     }
     Ok(total)
 }
 
-pub fn link_set(db: &mut dyn Database, board_id: &str, parent: &str, from_key: &str, parent_key: &str) -> anyhow::Result<()> {
-    if crate::crud::app_by_id(db, parent)?.is_none() {
-        anyhow::bail!("parent board {parent} not found");
-    }
+pub fn link_set(db: &mut dyn Database, child_board: &str, child_table: &str, parent_board: &str, parent_table: &str, from_key: &str, parent_key: &str) -> anyhow::Result<()> {
     let link = Link {
-        child_board: board_id.to_string(),
-        parent_board: parent.to_string(),
+        child_board: child_board.to_string(),
+        child_table: child_table.to_string(),
+        parent_board: parent_board.to_string(),
+        parent_table: parent_table.to_string(),
         from_key: crate::storage::ir::normalize_path(from_key),
         parent_key: crate::storage::ir::normalize_path(parent_key),
     };
-    db.upsert(TABLE_LINKS, "$.child_board", Row::new(Key::text(board_id), serde_json::to_value(&link)?))?;
+    db.upsert(TABLE_LINKS, "$.child_board", Row::new(Key::text(child_board), serde_json::to_value(&link)?))?;
     Ok(())
 }
 
@@ -108,8 +123,15 @@ pub fn link_clear(db: &mut dyn Database, board_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn join_list(db: &dyn Database, child_board: &str, conds: &SrvFilter, limit: usize, offset: usize) -> anyhow::Result<Vec<Record>> {
-    let mut records = crate::query::query_records(db, child_board, conds, &[], limit, offset)?;
+pub fn join_list(
+    db: &dyn Database,
+    child_board: &str,
+    child_table: &str,
+    conds: &SrvFilter,
+    limit: usize,
+    offset: usize,
+) -> anyhow::Result<Vec<Record>> {
+    let mut records = crate::query::query_records(db, child_board, child_table, conds, &[], limit, offset)?;
     let Some(link) = get_link(db, child_board)? else {
         return Ok(records);
     };
@@ -128,7 +150,7 @@ pub fn join_list(db: &dyn Database, child_board: &str, conds: &SrvFilter, limit:
                 FilterCond { field: link.parent_key.clone(), op: Op::In, value: Json::Array(from_values) },
             ],
         };
-        for rec in crate::query::query_records(db, &link.parent_board, &filter, &[], usize::MAX, 0)? {
+        for rec in crate::query::query_records(db, &link.parent_board, &link.parent_table, &filter, &[], usize::MAX, 0)? {
             let v = crate::expr::get_path(&rec.payload, &link.parent_key);
             if !v.is_null() {
                 parents.insert(crate::storage::ir::scalar_text(&v), rec.payload);

@@ -31,6 +31,7 @@ pub fn add(
         enabled: arguments.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
         dedup_on: arguments.get("dedup_on").and_then(|d| d.as_str()).map(String::from),
         actions_json: arguments.get("actions").cloned(),
+        table: arguments.get("table").and_then(|t| t.as_str()).map(String::from),
     };
     engine.add_recipe(board, &recipe).map_err(|e| e.to_string())?;
     ok(json!({ "name": name }))

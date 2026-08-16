@@ -83,12 +83,13 @@ impl ServerlessEngine {
     pub fn insert_record(
         &mut self,
         board_id: &str,
+        table: &str,
         payload: Json,
         writer: Option<&str>,
         upsert: bool,
         principal: &Principal,
     ) -> anyhow::Result<i64> {
-        let seq = crate::crud::record_insert(self.db.as_mut(), board_id, payload.clone(), writer, upsert, principal)?;
+        let seq = crate::crud::record_insert(self.db.as_mut(), board_id, table, payload.clone(), writer, upsert, principal)?;
         self.emit(board_id, "created", seq, payload);
         Ok(seq)
     }
@@ -96,6 +97,7 @@ impl ServerlessEngine {
     pub fn bulk_insert(
         &mut self,
         board_id: &str,
+        table: &str,
         records: Vec<Json>,
         writer: Option<&str>,
         upsert: bool,
@@ -104,6 +106,7 @@ impl ServerlessEngine {
         let seqs = crate::crud::record_bulk_insert(
             self.db.as_mut(),
             board_id,
+            table,
             records.clone(),
             writer,
             upsert,
@@ -116,11 +119,12 @@ impl ServerlessEngine {
     }
 
     /// Import records from a JSON (array/JSONL) or CSV dump. Each row is
-    /// validated against the board schema; invalid rows are skipped and
+    /// validated against the table schema; invalid rows are skipped and
     /// reported rather than aborting the whole import.
     pub fn import_records(
         &mut self,
         board_id: &str,
+        table: &str,
         format: &str,
         data: &str,
         separator: char,
@@ -133,6 +137,7 @@ impl ServerlessEngine {
         for record in records {
             match self.insert_record(
                 board_id,
+                table,
                 record.clone(),
                 Some(&principal.id),
                 upsert,
@@ -150,18 +155,19 @@ impl ServerlessEngine {
         }))
     }
 
-    pub fn get_record(&self, board_id: &str, seq: i64) -> anyhow::Result<Option<Record>> {
-        crate::crud::record_get(self.db.as_ref(), board_id, seq)
+    pub fn get_record(&self, board_id: &str, table: &str, seq: i64) -> anyhow::Result<Option<Record>> {
+        crate::crud::record_get(self.db.as_ref(), board_id, table, seq)
     }
 
     pub fn set_record(
         &mut self,
         board_id: &str,
+        table: &str,
         seq: i64,
         payload: Json,
         writer: Option<&str>,
     ) -> anyhow::Result<()> {
-        crate::crud::record_set(self.db.as_mut(), board_id, seq, payload.clone(), writer)?;
+        crate::crud::record_set(self.db.as_mut(), board_id, table, seq, payload.clone(), writer)?;
         self.emit(board_id, "updated", seq, payload);
         Ok(())
     }
@@ -169,11 +175,12 @@ impl ServerlessEngine {
     pub fn patch_record(
         &mut self,
         board_id: &str,
+        table: &str,
         seq: i64,
         ops: &Json,
         writer: Option<&str>,
     ) -> anyhow::Result<Json> {
-        let merged = crate::crud::record_patch(self.db.as_mut(), board_id, seq, ops, writer)?;
+        let merged = crate::crud::record_patch(self.db.as_mut(), board_id, table, seq, ops, writer)?;
         self.emit(board_id, "updated", seq, merged.clone());
         Ok(merged)
     }
@@ -181,40 +188,66 @@ impl ServerlessEngine {
     pub fn patch_first(
         &mut self,
         board_id: &str,
+        table: &str,
         conds: &SrvFilter,
         ops: &Json,
     ) -> anyhow::Result<Option<Json>> {
-        crate::crud::record_patch_first(self.db.as_mut(), board_id, conds, ops)
+        crate::crud::record_patch_first(self.db.as_mut(), board_id, table, conds, ops)
     }
 
-    pub fn delete_record(&mut self, board_id: &str, seq: i64) -> anyhow::Result<bool> {
-        let deleted = crate::crud::record_delete_one(self.db.as_mut(), board_id, seq)?;
+    pub fn delete_record(&mut self, board_id: &str, table: &str, seq: i64) -> anyhow::Result<bool> {
+        let deleted = crate::crud::record_delete_one(self.db.as_mut(), board_id, table, seq)?;
         if deleted {
             self.emit(board_id, "deleted", seq, Json::Null);
         }
         Ok(deleted)
     }
 
-    pub fn delete_records(&mut self, board_id: &str, conds: &SrvFilter) -> anyhow::Result<usize> {
-        crate::crud::record_delete_filter(self.db.as_mut(), board_id, conds)
+    pub fn delete_records(&mut self, board_id: &str, table: &str, conds: &SrvFilter) -> anyhow::Result<usize> {
+        crate::crud::record_delete_filter(self.db.as_mut(), board_id, table, conds)
     }
 
     pub fn list_records(
         &self,
         board_id: &str,
+        table: &str,
         limit: usize,
         before: Option<i64>,
         offset: usize,
     ) -> anyhow::Result<Vec<Record>> {
-        crate::crud::record_list(self.db.as_ref(), board_id, limit, before, offset)
+        crate::crud::record_list(self.db.as_ref(), board_id, table, limit, before, offset)
     }
 
-    pub fn count_records(&self, board_id: &str) -> anyhow::Result<i64> {
-        crate::crud::record_count(self.db.as_ref(), board_id)
+    pub fn count_records(&self, board_id: &str, table: &str) -> anyhow::Result<i64> {
+        crate::crud::record_count(self.db.as_ref(), board_id, table)
     }
 
     pub fn records_after(&self, board_id: &str, after: i64) -> anyhow::Result<Vec<Record>> {
         crate::crud::records_after(self.db.as_ref(), board_id, after)
+    }
+
+    // ---- tables ---------------------------------------------------------
+
+    pub fn create_table(
+        &mut self,
+        board_id: &str,
+        table: &str,
+        schema: Option<Json>,
+        unique_key: Option<&str>,
+    ) -> anyhow::Result<crate::model::TableConfig> {
+        crate::crud::table_create(self.db.as_mut(), board_id, table, schema, unique_key)
+    }
+
+    pub fn list_tables(&self, board_id: &str) -> anyhow::Result<Vec<crate::model::TableConfig>> {
+        crate::crud::table_list(self.db.as_ref(), board_id)
+    }
+
+    pub fn get_table(&self, board_id: &str, table: &str) -> anyhow::Result<Option<crate::model::TableConfig>> {
+        crate::crud::table_get(self.db.as_ref(), board_id, table)
+    }
+
+    pub fn drop_table(&mut self, board_id: &str, table: &str) -> anyhow::Result<bool> {
+        crate::crud::table_delete(self.db.as_mut(), board_id, table)
     }
 
     // ---- query / search / aggregate / join ----------------------------
@@ -222,6 +255,7 @@ impl ServerlessEngine {
     pub fn query_records(
         &self,
         board_id: &str,
+        table: &str,
         filter: &SrvFilter,
         orders: &[(String, bool)],
         limit: usize,
@@ -230,6 +264,7 @@ impl ServerlessEngine {
         crate::query::query_records(
             self.db.as_ref(),
             board_id,
+            table,
             filter,
             orders,
             limit,
@@ -240,6 +275,7 @@ impl ServerlessEngine {
     pub fn search_records(
         &self,
         board_id: &str,
+        table: &str,
         query: &str,
         conds: &SrvFilter,
         limit: usize,
@@ -249,6 +285,7 @@ impl ServerlessEngine {
         crate::query::search_records(
             self.db.as_ref(),
             board_id,
+            table,
             query,
             conds,
             limit,
@@ -260,6 +297,7 @@ impl ServerlessEngine {
     pub fn aggregate_records(
         &self,
         board_id: &str,
+        table: &str,
         conds: &SrvFilter,
         agg: Agg,
         field: Option<&str>,
@@ -268,6 +306,7 @@ impl ServerlessEngine {
         crate::query::aggregate_records(
             self.db.as_ref(),
             board_id,
+            table,
             conds,
             agg,
             field,
@@ -278,11 +317,12 @@ impl ServerlessEngine {
     pub fn join_list(
         &self,
         child_board: &str,
+        child_table: &str,
         conds: &SrvFilter,
         limit: usize,
         offset: usize,
     ) -> anyhow::Result<Vec<Record>> {
-        crate::policy::join_list(self.db.as_ref(), child_board, conds, limit, offset)
+        crate::policy::join_list(self.db.as_ref(), child_board, child_table, conds, limit, offset)
     }
 
     // ---- keys ----------------------------------------------------------
@@ -387,34 +427,35 @@ impl ServerlessEngine {
     pub fn set_ttl(
         &mut self,
         board_id: &str,
+        table: &str,
         seconds: Option<i64>,
         field: Option<&str>,
     ) -> anyhow::Result<()> {
-        crate::policy::ttl_set(self.db.as_mut(), board_id, seconds, field)
+        crate::policy::ttl_set(self.db.as_mut(), board_id, table, seconds, field)
     }
 
-    pub fn clear_ttl(&mut self, board_id: &str) -> anyhow::Result<()> {
-        crate::policy::ttl_clear(self.db.as_mut(), board_id)
+    pub fn clear_ttl(&mut self, board_id: &str, table: &str) -> anyhow::Result<()> {
+        crate::policy::ttl_clear(self.db.as_mut(), board_id, table)
     }
 
-    pub fn set_link(&mut self, board_id: &str, parent: &str, from_key: &str, parent_key: &str) -> anyhow::Result<()> {
-        crate::policy::link_set(self.db.as_mut(), board_id, parent, from_key, parent_key)
+    pub fn set_link(&mut self, board_id: &str, child_table: &str, parent: &str, parent_table: &str, from_key: &str, parent_key: &str) -> anyhow::Result<()> {
+        crate::policy::link_set(self.db.as_mut(), board_id, child_table, parent, parent_table, from_key, parent_key)
     }
 
     pub fn clear_link(&mut self, board_id: &str) -> anyhow::Result<()> {
         crate::policy::link_clear(self.db.as_mut(), board_id)
     }
 
-    pub fn set_computed(&mut self, board_id: &str, map: &Json) -> anyhow::Result<()> {
-        crate::schema::computed_set(self.db.as_mut(), board_id, map)
+    pub fn set_computed(&mut self, board_id: &str, table: &str, map: &Json) -> anyhow::Result<()> {
+        crate::schema::computed_set(self.db.as_mut(), board_id, table, map)
     }
 
-    pub fn set_validate(&mut self, board_id: &str, rules: &Json) -> anyhow::Result<()> {
-        crate::schema::validate_set(self.db.as_mut(), board_id, rules)
+    pub fn set_validate(&mut self, board_id: &str, table: &str, rules: &Json) -> anyhow::Result<()> {
+        crate::schema::validate_set(self.db.as_mut(), board_id, table, rules)
     }
 
-    pub fn set_redact(&mut self, board_id: &str, paths: &Json) -> anyhow::Result<()> {
-        crate::schema::redact_set(self.db.as_mut(), board_id, paths)
+    pub fn set_redact(&mut self, board_id: &str, table: &str, paths: &Json) -> anyhow::Result<()> {
+        crate::schema::redact_set(self.db.as_mut(), board_id, table, paths)
     }
 
     pub fn set_webhook_secret(&mut self, board_id: &str, secret: Option<&str>) -> anyhow::Result<()> {
@@ -455,18 +496,19 @@ impl ServerlessEngine {
     pub fn upload(
         &mut self,
         board_id: &str,
+        table: &str,
         filename: &str,
         content_type: &str,
         bytes: &[u8],
         meta: &Json,
     ) -> anyhow::Result<i64> {
-        let seq = crate::files::file_upload(self.db.as_mut(), self.store.as_ref(), board_id, filename, content_type, bytes, meta)?;
+        let seq = crate::files::file_upload(self.db.as_mut(), self.store.as_ref(), board_id, table, filename, content_type, bytes, meta)?;
         self.emit(board_id, "created", seq, meta.clone());
         Ok(seq)
     }
 
-    pub fn download(&self, board_id: &str, file: &str) -> anyhow::Result<Option<(Vec<u8>, String)>> {
-        crate::files::file_download(self.db.as_ref(), self.store.as_ref(), board_id, file)
+    pub fn download(&self, board_id: &str, table: &str, file: &str) -> anyhow::Result<Option<(Vec<u8>, String)>> {
+        crate::files::file_download(self.db.as_ref(), self.store.as_ref(), board_id, table, file)
     }
 
     pub fn list_files(&self, board_id: &str) -> anyhow::Result<Vec<crate::storage::object_store::KeyInfo>> {
@@ -500,11 +542,12 @@ impl ServerlessEngine {
     pub fn dispatch_recipes(
         &mut self,
         board_id: &str,
+        table: &str,
         event: crate::events::EventKind,
         seq: Option<i64>,
         payload: Option<Json>,
     ) -> anyhow::Result<()> {
-        crate::automation::dispatch(self.db.as_mut(), board_id, event, seq, payload)
+        crate::automation::dispatch(self.db.as_mut(), board_id, table, event, seq, payload)
     }
 
     pub fn ttl_sweep(&mut self) -> anyhow::Result<usize> {

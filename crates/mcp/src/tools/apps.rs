@@ -67,7 +67,12 @@ pub fn resources(
         .map_err(|e| e.to_string())?
         .filter(|b| b.owner_key == principal.id)
         .ok_or_else(|| "board not found or not owned".to_string())?;
-    let records = engine.count_records(board_id).map_err(|e| e.to_string())?;
+    let mut records: i64 = 0;
+    if let Ok(tables) = engine.list_tables(board_id) {
+        for t in tables {
+            records += engine.count_records(board_id, &t.table).map_err(|e| e.to_string())?;
+        }
+    }
     let mut storage: u64 = 0;
     if let Ok(keys) = engine.object_store().list(&format!("{board_id}/files/")) {
         storage += keys.iter().map(|k| k.size).sum::<u64>();
@@ -126,18 +131,18 @@ pub fn update(
             .map_err(|e| e.to_string())?;
     }
     if let Some(v) = arguments.get("computed") {
-        engine.set_computed(board_id, v).map_err(|e| e.to_string())?;
+        engine.set_computed(board_id, "records", v).map_err(|e| e.to_string())?;
     }
     if let Some(v) = arguments.get("validate") {
-        engine.set_validate(board_id, v).map_err(|e| e.to_string())?;
+        engine.set_validate(board_id, "records", v).map_err(|e| e.to_string())?;
     }
     if let Some(v) = arguments.get("redact") {
-        engine.set_redact(board_id, v).map_err(|e| e.to_string())?;
+        engine.set_redact(board_id, "records", v).map_err(|e| e.to_string())?;
     }
     if let Some(v) = arguments.get("ttl_seconds") {
         let secs = v.as_i64();
         let field = arguments.get("ttl_field").and_then(|f| f.as_str()).map(String::from);
-        engine.set_ttl(board_id, secs, field.as_deref()).map_err(|e| e.to_string())?;
+        engine.set_ttl(board_id, "records", secs, field.as_deref()).map_err(|e| e.to_string())?;
     }
     if let Some(v) = arguments.get("audit") {
         engine.set_audit(board_id, v.as_bool().unwrap_or(false)).map_err(|e| e.to_string())?;

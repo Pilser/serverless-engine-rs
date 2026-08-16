@@ -1,13 +1,13 @@
-use crate::model::Record;
+use crate::model::{Record, TableConfig};
 use crate::storage::database::{Database, Query, Row, TtlClause};
 use crate::storage::ir::{Agg, FilterCond, Op, SrvFilter};
 use crate::tables::TABLE_RECORDS;
 use serde_json::Value as Json;
 
-fn board_ttl_clause(board: &crate::model::Board) -> Option<TtlClause> {
+fn table_ttl_clause(cfg: &TableConfig) -> Option<TtlClause> {
     Some(TtlClause {
-        seconds: board.ttl_seconds,
-        field: board.ttl_field.clone(),
+        seconds: cfg.ttl_seconds,
+        field: cfg.ttl_field.clone(),
     })
 }
 
@@ -18,26 +18,27 @@ fn to_record(row: Row) -> anyhow::Result<Record> {
 pub fn query_records(
     db: &dyn Database,
     board_id: &str,
+    table: &str,
     filter: &SrvFilter,
     orders: &[(String, bool)],
     limit: usize,
     offset: usize,
 ) -> anyhow::Result<Vec<Record>> {
-    let board = crate::crud::load_board(db, board_id)?;
+    let cfg = crate::crud::load_table(db, board_id, table)?;
     let limit = limit.clamp(1, 500);
-    let mut conds = vec![crate::crud::board_cond(board_id)];
+    let mut conds = vec![crate::crud::board_cond(board_id), crate::crud::table_cond(table)];
     conds.extend(filter.conds.clone());
     let q = Query {
         filter: SrvFilter { conds },
         orders: orders.to_vec(),
         limit,
         offset,
-        ttl: board_ttl_clause(&board),
+        ttl: table_ttl_clause(&cfg),
     };
     let mut recs = Vec::new();
     for row in db.query(TABLE_RECORDS, &q)?.rows {
         let mut rec = to_record(row)?;
-        rec.payload = crate::schema::apply_redact(&board, &rec.payload);
+        rec.payload = crate::schema::apply_redact(&cfg, &rec.payload);
         recs.push(rec);
     }
     Ok(recs)
@@ -74,15 +75,16 @@ fn highlight(text: &str, query: &str) -> String {
 pub fn search_records(
     db: &dyn Database,
     board_id: &str,
+    table: &str,
     query: &str,
     conds: &SrvFilter,
     limit: usize,
     offset: usize,
     snippet: bool,
 ) -> anyhow::Result<Vec<Record>> {
-    let board = crate::crud::load_board(db, board_id)?;
+    let cfg = crate::crud::load_table(db, board_id, table)?;
     let limit = limit.clamp(1, 500);
-    let mut all = vec![crate::crud::board_cond(board_id)];
+    let mut all = vec![crate::crud::board_cond(board_id), crate::crud::table_cond(table)];
     all.push(FilterCond {
         field: "_".to_string(),
         op: Op::Search,
@@ -94,12 +96,12 @@ pub fn search_records(
         orders: vec![],
         limit,
         offset,
-        ttl: board_ttl_clause(&board),
+        ttl: table_ttl_clause(&cfg),
     };
     let mut recs = Vec::new();
     for row in db.query(TABLE_RECORDS, &q)?.rows {
         let mut rec = to_record(row)?;
-        rec.payload = crate::schema::apply_redact(&board, &rec.payload);
+        rec.payload = crate::schema::apply_redact(&cfg, &rec.payload);
         if snippet && !query.trim().is_empty() {
             let text = serde_json::to_string(&rec.payload).unwrap_or_default();
             rec.snippet = Some(highlight(&text, query));
@@ -112,22 +114,24 @@ pub fn search_records(
 pub fn aggregate_records(
     db: &dyn Database,
     board_id: &str,
-    conds: &SrvFilter,
+    table: &str,
+    conds_orig: &SrvFilter,
     agg: Agg,
     field: Option<&str>,
     group_by: Option<&str>,
 ) -> anyhow::Result<Vec<Json>> {
-    let board = crate::crud::load_board(db, board_id)?;
+    let cfg = crate::crud::load_table(db, board_id, table)?;
     if agg != Agg::Count && field.is_none() {
         anyhow::bail!("field is required for {agg:?}");
     }
     db.aggregate(
         TABLE_RECORDS,
         board_id,
-        conds,
+        table,
+        conds_orig,
         agg,
         field,
         group_by,
-        board_ttl_clause(&board),
+        table_ttl_clause(&cfg),
     )
 }

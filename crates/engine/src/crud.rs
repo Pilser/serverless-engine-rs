@@ -1,7 +1,7 @@
-use crate::model::{Board, Key, Principal, Record};
+use crate::model::{Board, Key, Principal, Record, TableConfig};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{normalize_path, path_items, scalar_text, FilterCond, Op, SrvFilter};
-use crate::tables::{TABLE_APPS, TABLE_RECORDS};
+use crate::tables::{scoped_key, TABLE_APPS, TABLE_RECORDS, TABLE_TABLES};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,14 +47,8 @@ pub fn subtract_seconds(now: &str, secs: i64) -> String {
     }
 }
 
-fn ttl_config(board: &Board) -> (Option<i64>, Option<String>) {
-    let Ok(Json::Object(m)) = serde_json::to_value(board) else {
-        return (None, None);
-    };
-    (
-        m.get("ttl_seconds").and_then(|v| v.as_i64()),
-        m.get("ttl_field").and_then(|v| v.as_str().map(String::from)),
-    )
+fn ttl_config(cfg: &TableConfig) -> (Option<i64>, Option<String>) {
+    (cfg.ttl_seconds, cfg.ttl_field.clone())
 }
 
 fn ttl_dead(seconds: Option<i64>, field: Option<&str>, created_at: &str, payload: &Json, now: &str) -> bool {
@@ -72,44 +66,56 @@ fn ttl_dead(seconds: Option<i64>, field: Option<&str>, created_at: &str, payload
     age_dead || field_dead
 }
 
-pub fn is_ttl_dead(board: &Board, created_at: &str, payload: &Json, now: &str) -> bool {
-    let (seconds, field) = ttl_config(board);
+pub fn is_ttl_dead(cfg: &TableConfig, created_at: &str, payload: &Json, now: &str) -> bool {
+    let (seconds, field) = ttl_config(cfg);
     ttl_dead(seconds, field.as_deref(), created_at, payload, now)
 }
 
-pub fn records_ttl_alive(board: &Board, record: &Record, now: &str) -> bool {
+pub fn records_ttl_alive(cfg: &TableConfig, record: &Record, now: &str) -> bool {
     let created = record.created_at.as_deref().unwrap_or("");
-    !is_ttl_dead(board, created, &record.payload, now)
+    !is_ttl_dead(cfg, created, &record.payload, now)
 }
 
 pub fn board_cond(board_id: &str) -> FilterCond {
     FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: Json::String(board_id.to_string()) }
 }
 
-fn exact_filter(board_id: &str, seq: i64) -> SrvFilter {
+pub fn table_cond(table: &str) -> FilterCond {
+    FilterCond { field: "$.table".to_string(), op: Op::Eq, value: Json::String(table.to_string()) }
+}
+
+fn exact_filter(board_id: &str, table: &str, seq: i64) -> SrvFilter {
     SrvFilter {
         conds: vec![
             board_cond(board_id),
+            table_cond(table),
             FilterCond { field: "$.seq".to_string(), op: Op::Eq, value: Json::from(seq) },
         ],
     }
 }
 
-fn scan_rows(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Row>> {
+fn scan_rows(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<Vec<Row>> {
     let q = Query {
-        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        filter: SrvFilter { conds: vec![board_cond(board_id), table_cond(table)] },
         orders: vec![],
         limit: usize::MAX,
         offset: 0,
-    
         ttl: None,
     };
     Ok(db.query(TABLE_RECORDS, &q)?.rows)
 }
 
-fn stored_record_json(board_id: &str, seq: i64, payload: &Json, created_at: &str, writer: Option<&str>) -> Json {
+fn stored_record_json(
+    board_id: &str,
+    table: &str,
+    seq: i64,
+    payload: &Json,
+    created_at: &str,
+    writer: Option<&str>,
+) -> Json {
     serde_json::json!({
         "board_id": board_id,
+        "table": table,
         "seq": seq,
         "payload": payload,
         "created_at": created_at,
@@ -117,8 +123,8 @@ fn stored_record_json(board_id: &str, seq: i64, payload: &Json, created_at: &str
     })
 }
 
-fn find_record(db: &dyn Database, board_id: &str, seq: i64) -> anyhow::Result<Option<Record>> {
-    for row in scan_rows(db, board_id)? {
+fn find_record(db: &dyn Database, board_id: &str, table: &str, seq: i64) -> anyhow::Result<Option<Record>> {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
         if rec.seq == seq {
             return Ok(Some(rec));
@@ -127,9 +133,9 @@ fn find_record(db: &dyn Database, board_id: &str, seq: i64) -> anyhow::Result<Op
     Ok(None)
 }
 
-fn next_seq(db: &dyn Database, board_id: &str) -> anyhow::Result<i64> {
+fn next_seq(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<i64> {
     let mut max = 0i64;
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         if let Some(s) = row.data.get("seq").and_then(|v| v.as_i64()) {
             max = max.max(s);
         }
@@ -137,21 +143,22 @@ fn next_seq(db: &dyn Database, board_id: &str) -> anyhow::Result<i64> {
     Ok(max + 1)
 }
 
-pub fn load_board(db: &dyn Database, board_id: &str) -> anyhow::Result<Board> {
+pub fn load_table(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<TableConfig> {
     let row = db
-        .get(TABLE_APPS, &Key::text(board_id))?
-        .ok_or_else(|| anyhow::anyhow!("board {board_id} does not exist"))?;
+        .get(TABLE_TABLES, &Key::text(scoped_key(board_id, table)))?
+        .ok_or_else(|| anyhow::anyhow!("table '{table}' does not exist on board {board_id}"))?;
     Ok(serde_json::from_value(row.data)?)
 }
 
 pub fn find_unique_holder(
     db: &dyn Database,
     board_id: &str,
+    table: &str,
     path: &str,
     text: &str,
     exclude_seq: Option<i64>,
 ) -> anyhow::Result<Option<i64>> {
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
         if let Some(e) = exclude_seq {
             if rec.seq == e {
@@ -166,22 +173,97 @@ pub fn find_unique_holder(
     Ok(None)
 }
 
+// ---- tables ---------------------------------------------------------------
+
+pub fn table_create(
+    db: &mut dyn Database,
+    board_id: &str,
+    table: &str,
+    schema: Option<Json>,
+    unique_key: Option<&str>,
+) -> anyhow::Result<TableConfig> {
+    if table.is_empty() {
+        anyhow::bail!("table name is required");
+    }
+    if table.contains('/') {
+        anyhow::bail!("table name cannot contain '/'");
+    }
+    let key = scoped_key(board_id, table);
+    if db.get(TABLE_TABLES, &Key::text(&key))?.is_some() {
+        anyhow::bail!("table '{table}' already exists");
+    }
+    let cfg = TableConfig {
+        board_id: board_id.to_string(),
+        table: table.to_string(),
+        schema_json: schema,
+        unique_key: unique_key.map(String::from),
+        computed_json: None,
+        validate_json: None,
+        redact_json: None,
+        ttl_seconds: None,
+        ttl_field: None,
+        created_at: Some(now_str()),
+    };
+    db.insert(TABLE_TABLES, Row::new(Key::text(key), serde_json::to_value(&cfg)?))?;
+    Ok(cfg)
+}
+
+pub fn table_get(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<Option<TableConfig>> {
+    let Some(row) = db.get(TABLE_TABLES, &Key::text(scoped_key(board_id, table)))? else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_value(row.data)?))
+}
+
+pub fn table_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<TableConfig>> {
+    let q = Query {
+        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        orders: vec![("$.created_at".to_string(), false)],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    let mut out = Vec::new();
+    for row in db.query(TABLE_TABLES, &q)?.rows {
+        out.push(serde_json::from_value(row.data)?);
+    }
+    Ok(out)
+}
+
+pub fn table_delete(db: &mut dyn Database, board_id: &str, table: &str) -> anyhow::Result<bool> {
+    let existed = db.get(TABLE_TABLES, &Key::text(scoped_key(board_id, table)))?.is_some();
+    if existed {
+        db.delete(TABLE_RECORDS, &SrvFilter { conds: vec![board_cond(board_id), table_cond(table)] })?;
+        db.delete(TABLE_TABLES, &SrvFilter { conds: vec![board_cond(board_id), table_cond(table)] })?;
+    }
+    Ok(existed)
+}
+
+// ---- board / app ----------------------------------------------------------
+
+pub fn load_board(db: &dyn Database, board_id: &str) -> anyhow::Result<Board> {
+    let row = db
+        .get(TABLE_APPS, &Key::text(board_id))?
+        .ok_or_else(|| anyhow::anyhow!("board {board_id} does not exist"))?;
+    Ok(serde_json::from_value(row.data)?)
+}
+
 pub fn app_create(
     db: &mut dyn Database,
     owner: &str,
     title: &str,
-    schema: Option<Json>,
+    _schema: Option<Json>,
     public_reads: bool,
-    unique_key: Option<&str>,
+    _unique_key: Option<&str>,
 ) -> anyhow::Result<Board> {
     let board_id = gen_board_id();
     let board = Board {
         board_id: board_id.clone(),
         owner_key: owner.to_string(),
         title: title.to_string(),
-        schema_json: schema,
+        schema_json: None,
         public_reads,
-        unique_key: unique_key.map(String::from),
+        unique_key: None,
         computed_json: None,
         validate_json: None,
         redact_json: None,
@@ -238,16 +320,10 @@ pub fn app_update(db: &mut dyn Database, board_id: &str, owner: &str, patch: &Js
             updated.title = s.to_string();
         }
     }
-    if let Some(v) = obj.get("schema") {
-        updated.schema_json = if v.is_null() { None } else { Some(v.clone()) };
-    }
     if let Some(v) = obj.get("public_reads") {
         if let Some(b) = v.as_bool() {
             updated.public_reads = b;
         }
-    }
-    if let Some(v) = obj.get("unique_key") {
-        updated.unique_key = if v.is_null() { None } else { v.as_str().map(String::from) };
     }
     db.update(TABLE_APPS, &Key::text(board_id), &serde_json::to_value(&updated)?)?;
     Ok(())
@@ -262,12 +338,13 @@ pub fn app_delete(db: &mut dyn Database, board_id: &str, owner: &str) -> anyhow:
         anyhow::bail!("board {board_id} is not owned by {owner}");
     }
     db.delete(TABLE_RECORDS, &SrvFilter { conds: vec![board_cond(board_id)] })?;
+    db.delete(TABLE_TABLES, &SrvFilter { conds: vec![board_cond(board_id)] })?;
     db.delete(TABLE_APPS, &SrvFilter { conds: vec![board_cond(board_id)] })?;
     Ok(())
 }
 
-fn unique_holder(db: &dyn Database, board: &Board, payload: &Json) -> anyhow::Result<Option<i64>> {
-    let Some(key) = board.unique_key.as_deref() else {
+fn unique_holder(db: &dyn Database, cfg: &TableConfig, payload: &Json) -> anyhow::Result<Option<i64>> {
+    let Some(key) = cfg.unique_key.as_deref() else {
         return Ok(None);
     };
     let path = normalize_path(key);
@@ -276,29 +353,30 @@ fn unique_holder(db: &dyn Database, board: &Board, payload: &Json) -> anyhow::Re
         return Ok(None);
     }
     let text = scalar_text(&value);
-    find_unique_holder(db, &board.board_id, &path, &text, None)
+    find_unique_holder(db, &cfg.board_id, &cfg.table, &path, &text, None)
 }
 
 pub fn record_insert(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     payload: Json,
     writer: Option<&str>,
     upsert: bool,
     principal: &Principal,
 ) -> anyhow::Result<i64> {
-    let board = load_board(db, board_id)?;
-    let mut prepared = crate::schema::prepare_payload(db, &board, payload)?;
+    let cfg = load_table(db, board_id, table)?;
+    let mut prepared = crate::schema::prepare_payload(db, &cfg, payload)?;
     crate::auth::force_scope(principal, &mut prepared);
     if upsert {
-        if let Some(existing) = unique_holder(db, &board, &prepared)? {
-            record_set(&mut *db, board_id, existing, prepared, writer)?;
+        if let Some(existing) = unique_holder(db, &cfg, &prepared)? {
+            record_set(&mut *db, board_id, table, existing, prepared, writer)?;
             return Ok(existing);
         }
     }
-    crate::schema::check_unique(db, &board, &prepared, None)?;
-    let seq = next_seq(db, board_id)?;
-    let stored = stored_record_json(board_id, seq, &prepared, &now_str(), writer);
+    crate::schema::check_unique(db, &cfg, &prepared, None)?;
+    let seq = next_seq(db, board_id, table)?;
+    let stored = stored_record_json(board_id, table, seq, &prepared, &now_str(), writer);
     db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored))?;
     crate::audit::append(
         db,
@@ -308,7 +386,7 @@ pub fn record_insert(
         writer,
         Some(&sha256_hex(&prepared)),
     )?;
-    crate::automation::dispatch(db, board_id, crate::events::EventKind::Created, Some(seq), Some(prepared.clone()))?;
+    crate::automation::dispatch(db, board_id, table, crate::events::EventKind::Created, Some(seq), Some(prepared.clone()))?;
     crate::webhooks::fire_hooks(db, board_id, &prepared)?;
     Ok(seq)
 }
@@ -316,6 +394,7 @@ pub fn record_insert(
 pub fn record_bulk_insert(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     records: Vec<Json>,
     writer: Option<&str>,
     upsert: bool,
@@ -323,42 +402,43 @@ pub fn record_bulk_insert(
 ) -> anyhow::Result<Vec<i64>> {
     let mut seqs = Vec::with_capacity(records.len());
     for payload in records {
-        seqs.push(record_insert(&mut *db, board_id, payload, writer, upsert, principal)?);
+        seqs.push(record_insert(&mut *db, board_id, table, payload, writer, upsert, principal)?);
     }
     Ok(seqs)
 }
 
-pub fn record_get(db: &dyn Database, board_id: &str, seq: i64) -> anyhow::Result<Option<Record>> {
-    let board = load_board(db, board_id)?;
-    let Some(mut rec) = find_record(db, board_id, seq)? else {
+pub fn record_get(db: &dyn Database, board_id: &str, table: &str, seq: i64) -> anyhow::Result<Option<Record>> {
+    let cfg = load_table(db, board_id, table)?;
+    let Some(mut rec) = find_record(db, board_id, table, seq)? else {
         return Ok(None);
     };
     let now = now_str();
-    if !records_ttl_alive(&board, &rec, &now) {
+    if !records_ttl_alive(&cfg, &rec, &now) {
         return Ok(None);
     }
-    rec.payload = crate::schema::apply_redact(&board, &rec.payload);
+    rec.payload = crate::schema::apply_redact(&cfg, &rec.payload);
     Ok(Some(rec))
 }
 
 pub fn record_set(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     seq: i64,
     payload: Json,
     writer: Option<&str>,
 ) -> anyhow::Result<()> {
-    let board = load_board(db, board_id)?;
-    let prepared = crate::schema::prepare_payload(db, &board, payload)?;
-    crate::schema::check_unique(db, &board, &prepared, Some(seq))?;
-    let current = find_record(db, board_id, seq)?
+    let cfg = load_table(db, board_id, table)?;
+    let prepared = crate::schema::prepare_payload(db, &cfg, payload)?;
+    crate::schema::check_unique(db, &cfg, &prepared, Some(seq))?;
+    let current = find_record(db, board_id, table, seq)?
         .ok_or_else(|| anyhow::anyhow!("record seq {seq} does not exist"))?;
     let created_at = current.created_at.unwrap_or_default();
-    let stored = stored_record_json(board_id, seq, &prepared, &created_at, writer);
-    db.delete(TABLE_RECORDS, &exact_filter(board_id, seq))?;
+    let stored = stored_record_json(board_id, table, seq, &prepared, &created_at, writer);
+    db.delete(TABLE_RECORDS, &exact_filter(board_id, table, seq))?;
     db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored))?;
     crate::audit::append(db, board_id, "updated", None, writer, Some(&sha256_hex(&prepared)))?;
-    crate::automation::dispatch(db, board_id, crate::events::EventKind::Updated, Some(seq), Some(prepared.clone()))?;
+    crate::automation::dispatch(db, board_id, table, crate::events::EventKind::Updated, Some(seq), Some(prepared.clone()))?;
     crate::webhooks::fire_hooks(db, board_id, &prepared)?;
     Ok(())
 }
@@ -366,24 +446,25 @@ pub fn record_set(
 pub fn record_patch(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     seq: i64,
     ops: &Json,
     writer: Option<&str>,
 ) -> anyhow::Result<Json> {
-    let board = load_board(db, board_id)?;
-    let current = find_record(db, board_id, seq)?
+    let cfg = load_table(db, board_id, table)?;
+    let current = find_record(db, board_id, table, seq)?
         .ok_or_else(|| anyhow::anyhow!("record seq {seq} does not exist"))?;
     let mut merged = current.payload.clone();
     apply_patch_ops(&mut merged, ops)?;
-    crate::schema::validate_schema(&board, &merged)?;
-    crate::schema::check_unique(db, &board, &merged, Some(seq))?;
+    crate::schema::validate_schema(&cfg, &merged)?;
+    crate::schema::check_unique(db, &cfg, &merged, Some(seq))?;
     let resolved_writer = writer.or(current.writer.as_deref());
     let created_at = current.created_at.unwrap_or_default();
-    let stored = stored_record_json(board_id, seq, &merged, &created_at, resolved_writer);
-    db.delete(TABLE_RECORDS, &exact_filter(board_id, seq))?;
+    let stored = stored_record_json(board_id, table, seq, &merged, &created_at, resolved_writer);
+    db.delete(TABLE_RECORDS, &exact_filter(board_id, table, seq))?;
     db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored))?;
     crate::audit::append(db, board_id, "updated", None, resolved_writer, Some(&sha256_hex(&merged)))?;
-    crate::automation::dispatch(db, board_id, crate::events::EventKind::Updated, Some(seq), Some(merged.clone()))?;
+    crate::automation::dispatch(db, board_id, table, crate::events::EventKind::Updated, Some(seq), Some(merged.clone()))?;
     crate::webhooks::fire_hooks(db, board_id, &merged)?;
     Ok(merged)
 }
@@ -391,15 +472,16 @@ pub fn record_patch(
 pub fn record_patch_first(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     conds: &SrvFilter,
     ops: &Json,
 ) -> anyhow::Result<Option<Json>> {
-    let board = load_board(db, board_id)?;
+    let cfg = load_table(db, board_id, table)?;
     let now = now_str();
     let mut recs = Vec::new();
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
-        if records_ttl_alive(&board, &rec, &now) && conds.matches(&rec.payload) {
+        if records_ttl_alive(&cfg, &rec, &now) && conds.matches(&rec.payload) {
             recs.push(rec);
         }
     }
@@ -407,15 +489,15 @@ pub fn record_patch_first(
     let Some(rec) = recs.into_iter().next() else {
         return Ok(None);
     };
-    let merged = record_patch(&mut *db, board_id, rec.seq, ops, None)?;
+    let merged = record_patch(&mut *db, board_id, table, rec.seq, ops, None)?;
     Ok(Some(merged))
 }
 
-pub fn record_delete_one(db: &mut dyn Database, board_id: &str, seq: i64) -> anyhow::Result<bool> {
-    let removed = db.delete(TABLE_RECORDS, &exact_filter(board_id, seq))? > 0;
+pub fn record_delete_one(db: &mut dyn Database, board_id: &str, table: &str, seq: i64) -> anyhow::Result<bool> {
+    let removed = db.delete(TABLE_RECORDS, &exact_filter(board_id, table, seq))? > 0;
     if removed {
         crate::audit::append(db, board_id, "deleted", None, None, None)?;
-        crate::automation::dispatch(db, board_id, crate::events::EventKind::Deleted, Some(seq), None)?;
+        crate::automation::dispatch(db, board_id, table, crate::events::EventKind::Deleted, Some(seq), None)?;
         crate::webhooks::fire_hooks(db, board_id, &Json::Null)?;
     }
     Ok(removed)
@@ -424,14 +506,15 @@ pub fn record_delete_one(db: &mut dyn Database, board_id: &str, seq: i64) -> any
 pub fn record_delete_filter(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     conds: &SrvFilter,
 ) -> anyhow::Result<usize> {
-    let board = load_board(db, board_id)?;
+    let cfg = load_table(db, board_id, table)?;
     let now = now_str();
     let mut seqs = Vec::new();
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
-        if records_ttl_alive(&board, &rec, &now) && conds.matches(&rec.payload) {
+        if records_ttl_alive(&cfg, &rec, &now) && conds.matches(&rec.payload) {
             seqs.push(rec.seq);
         }
     }
@@ -441,6 +524,7 @@ pub fn record_delete_filter(
     let filter = SrvFilter {
         conds: vec![
             board_cond(board_id),
+            table_cond(table),
             FilterCond {
                 field: "$.seq".to_string(),
                 op: Op::In,
@@ -454,17 +538,18 @@ pub fn record_delete_filter(
 pub fn record_list(
     db: &dyn Database,
     board_id: &str,
+    table: &str,
     limit: usize,
     before: Option<i64>,
     offset: usize,
 ) -> anyhow::Result<Vec<Record>> {
-    let board = load_board(db, board_id)?;
+    let cfg = load_table(db, board_id, table)?;
     let limit = limit.clamp(1, 200);
     let now = now_str();
     let mut recs = Vec::new();
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
-        if !records_ttl_alive(&board, &rec, &now) {
+        if !records_ttl_alive(&cfg, &rec, &now) {
             continue;
         }
         if let Some(b) = before {
@@ -480,19 +565,19 @@ pub fn record_list(
     let mut out = Vec::new();
     for rec in &recs[start..end] {
         let mut r = rec.clone();
-        r.payload = crate::schema::apply_redact(&board, &r.payload);
+        r.payload = crate::schema::apply_redact(&cfg, &r.payload);
         out.push(r);
     }
     Ok(out)
 }
 
-pub fn record_count(db: &dyn Database, board_id: &str) -> anyhow::Result<i64> {
-    let board = load_board(db, board_id)?;
+pub fn record_count(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<i64> {
+    let cfg = load_table(db, board_id, table)?;
     let now = now_str();
     let mut n = 0i64;
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
-        if records_ttl_alive(&board, &rec, &now) {
+        if records_ttl_alive(&cfg, &rec, &now) {
             n += 1;
         }
     }
@@ -500,34 +585,41 @@ pub fn record_count(db: &dyn Database, board_id: &str) -> anyhow::Result<i64> {
 }
 
 pub fn records_after(db: &dyn Database, board_id: &str, after: i64) -> anyhow::Result<Vec<Record>> {
-    let board = load_board(db, board_id)?;
-    let now = now_str();
     let mut recs = Vec::new();
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows_all_tables(db, board_id)? {
         let rec: Record = serde_json::from_value(row.data)?;
-        if rec.seq > after && records_ttl_alive(&board, &rec, &now) {
+        if rec.seq > after {
             recs.push(rec);
         }
     }
     recs.sort_by(|a, b| a.seq.cmp(&b.seq));
     recs.truncate(1000);
-    for rec in &mut recs {
-        rec.payload = crate::schema::apply_redact(&board, &rec.payload);
-    }
     Ok(recs)
+}
+
+fn scan_rows_all_tables(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Row>> {
+    let q = Query {
+        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    Ok(db.query(TABLE_RECORDS, &q)?.rows)
 }
 
 pub fn record_set_raw(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     seq: i64,
     payload: Json,
 ) -> anyhow::Result<()> {
-    let current = find_record(db, board_id, seq)?
+    let current = find_record(db, board_id, table, seq)?
         .ok_or_else(|| anyhow::anyhow!("record seq {seq} does not exist"))?;
     let created_at = current.created_at.unwrap_or_default();
-    let stored = stored_record_json(board_id, seq, &payload, &created_at, None);
-    db.delete(TABLE_RECORDS, &exact_filter(board_id, seq))?;
+    let stored = stored_record_json(board_id, table, seq, &payload, &created_at, None);
+    db.delete(TABLE_RECORDS, &exact_filter(board_id, table, seq))?;
     db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored))?;
     Ok(())
 }
@@ -535,15 +627,16 @@ pub fn record_set_raw(
 pub fn record_patch_first_raw(
     db: &mut dyn Database,
     board_id: &str,
+    table: &str,
     conds: &SrvFilter,
     ops: &Json,
 ) -> anyhow::Result<Option<Json>> {
-    let board = load_board(db, board_id)?;
+    let cfg = load_table(db, board_id, table)?;
     let now = now_str();
     let mut recs = Vec::new();
-    for row in scan_rows(db, board_id)? {
+    for row in scan_rows(db, board_id, table)? {
         let rec: Record = serde_json::from_value(row.data)?;
-        if records_ttl_alive(&board, &rec, &now) && conds.matches(&rec.payload) {
+        if records_ttl_alive(&cfg, &rec, &now) && conds.matches(&rec.payload) {
             recs.push(rec);
         }
     }
@@ -554,8 +647,8 @@ pub fn record_patch_first_raw(
     let mut merged = rec.payload.clone();
     apply_patch_ops(&mut merged, ops)?;
     let created_at = rec.created_at.unwrap_or_default();
-    let stored = stored_record_json(board_id, rec.seq, &merged, &created_at, rec.writer.as_deref());
-    db.delete(TABLE_RECORDS, &exact_filter(board_id, rec.seq))?;
+    let stored = stored_record_json(board_id, table, rec.seq, &merged, &created_at, rec.writer.as_deref());
+    db.delete(TABLE_RECORDS, &exact_filter(board_id, table, rec.seq))?;
     db.insert(TABLE_RECORDS, Row::new(Key::Int(rec.seq), stored))?;
     Ok(Some(merged))
 }

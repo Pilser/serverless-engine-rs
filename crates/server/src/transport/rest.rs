@@ -2,7 +2,7 @@ use crate::Server;
 use bytes::Bytes;
 use engine::events::EventKind;
 use engine::model::{Principal, Record};
-use engine::{parse_filter, Agg, FilterCond, Op, SrvFilter};
+use engine::{parse_filter, SrvFilter};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -105,7 +105,7 @@ pub fn parse_filter_param(raw: &str) -> anyhow::Result<SrvFilter> {
     parse_filter(&parsed)
 }
 
-fn orders_from(params: &HashMap<String, String>) -> Vec<(String, bool)> {
+pub fn orders_from(params: &HashMap<String, String>) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     if let Some(o) = params.get("order") {
         let dir = match params.get("dir").map(|d| d.as_str()) {
@@ -122,7 +122,7 @@ fn orders_from(params: &HashMap<String, String>) -> Vec<(String, bool)> {
     out
 }
 
-fn records_json(records: &[Record]) -> Vec<Json> {
+pub fn records_json(records: &[Record]) -> Vec<Json> {
     records
         .iter()
         .map(|r| {
@@ -257,7 +257,7 @@ fn cors_response() -> Response<BoxBodyResp> {
     json_response(StatusCode::NO_CONTENT, Json::Null)
 }
 
-fn rate_action(
+pub fn rate_action(
     server: &Server,
     board_id: &str,
     principal: &Principal,
@@ -357,20 +357,16 @@ async fn route(
         return resp;
     }
 
+    if tail.first() == Some(&"tables") {
+        return super::rest_tables::handle_tables(
+            server, board, method, &tail[1..], body, params, &principal,
+        );
+    }
+
     match (method.as_str(), tail) {
         ("GET", []) => app_info(server, board, &principal),
         ("DELETE", []) => app_delete(server, board, &principal),
         ("PATCH", ["app"]) => app_patch(server, board, &principal, body),
-        ("POST", ["submit"]) => submit(server, board, &principal, body, params),
-        ("GET", ["records"]) => records(server, board, &principal, params),
-        ("DELETE", ["records"]) => records_delete(server, board, &principal, params),
-        ("GET", ["record"]) => record(server, board, &principal, params),
-        ("GET", ["records", "after"]) => records_after(server, board, &principal, params),
-        ("PUT", ["records", seq]) => record_put(server, board, &principal, seq, body, params),
-        ("PATCH", ["records", seq]) => record_patch(server, board, &principal, seq, body, params),
-        ("DELETE", ["records", seq]) => record_delete(server, board, &principal, seq, params),
-        ("POST", ["bulk"]) => bulk(server, board, &principal, body, params),
-        ("GET", ["aggregate"]) => aggregate(server, board, &principal, params),
         ("GET", ["resources"]) => crate::resources::resources(server, board, &principal),
         ("POST", ["auth", "signup"]) => crate::transport::rest_auth::signup(server, board, &principal, body),
         ("POST", ["auth", "login"]) => crate::transport::rest_auth::login(server, board, body),
@@ -378,8 +374,7 @@ async fn route(
         ("GET", ["auth", "me"]) => {
             crate::transport::rest_auth::me(server, board, crate::identity::keys::token(headers).as_deref())
         }
-        ("GET", ["join"]) => join(server, board, &principal, params),
-        ("POST", ["upload"]) => upload(server, board, &principal, body, headers),
+        ("POST", ["upload"]) => upload(server, board, &principal, body, headers, params),
         ("GET", ["file"]) => file(server, board, &principal, params),
         ("POST", ["call"]) => call(server, board, &principal, body),
         ("POST", ["events"]) => events_inbound(server, board, &principal, body, headers),
@@ -526,406 +521,13 @@ fn app_patch(server: &Server, board: &str, principal: &Principal, body: &Bytes) 
     }
 }
 
-fn submit(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    body: &Bytes,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "submit") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    let exists = server.engine.lock().unwrap().get_app(board).ok().flatten().is_some();
-    if !exists {
-        return err_json(StatusCode::NOT_FOUND, "not found");
-    }
-    if !require_write(principal) {
-        return err_json(StatusCode::FORBIDDEN, "writer authorization required");
-    }
-    let payload: Json = match serde_json::from_slice(body) {
-        Ok(p) => p,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid json"),
-    };
-    let upsert = params
-        .get("upsert")
-        .map(|v| matches!(v.as_str(), "1" | "true"))
-        .unwrap_or(false);
-    let writer = principal.writer.clone();
-    let inserted = {
-        let mut engine = server.engine.lock().unwrap();
-        engine.insert_record(board, payload.clone(), writer.as_deref(), upsert, principal)
-    };
-    match inserted {
-        Ok(seq) => ok_json(json!({ "ok": true, "seq": seq })),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-    }
-}
-
-fn records(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, if params.contains_key("q") { "search" } else { "read" }) {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    let app = server.engine.lock().unwrap().get_app(board).ok().flatten();
-    let Some(app) = app else {
-        return err_json(StatusCode::NOT_FOUND, "not found");
-    };
-    if !app.public_reads && !require_read(principal) {
-        return err_json(StatusCode::FORBIDDEN, "private board");
-    }
-    let limit: usize = params
-        .get("limit")
-        .and_then(|l| l.parse().ok())
-        .unwrap_or(50)
-        .clamp(1, 500);
-    let offset: usize = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let orders = orders_from(params);
-    let mut extra_conds: Vec<FilterCond> = Vec::new();
-    if let Some(s) = &principal.scope {
-        extra_conds.push(FilterCond {
-            field: "$.customer_id".to_string(),
-            op: Op::Eq,
-            value: Json::String(s.clone()),
-        });
-    }
-
-    let engine = server.engine.lock().unwrap();
-
-    if let Some(q) = params.get("q").map(|q| url_decode(q)).filter(|q| !q.is_empty()) {
-        let mut conds = match params.get("filter").map(|f| url_decode(f)) {
-            Some(f) if !f.is_empty() => match parse_filter_param(&f) {
-                Ok(sf) => sf.conds,
-                Err(e) => return err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-            },
-            _ => Vec::new(),
-        };
-        conds.extend(extra_conds);
-        let snippet = params
-            .get("hl")
-            .map(|v| matches!(v.as_str(), "1" | "on" | "true"))
-            .unwrap_or(false);
-        let sf = SrvFilter { conds };
-        match engine.search_records(board, q.as_str(), &sf, limit, offset, snippet) {
-            Ok(rs) => ok_json(json!({ "ok": true, "records": records_json(&rs) })),
-            Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
-    } else {
-        let filter = match params.get("filter").map(|f| url_decode(f)) {
-            Some(f) if !f.is_empty() => match parse_filter_param(&f) {
-                Ok(sf) => sf,
-                Err(e) => return err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-            },
-            _ => SrvFilter::new(),
-        };
-        let mut conds = filter.conds;
-        conds.extend(extra_conds);
-        let sf = SrvFilter { conds };
-        match engine.query_records(board, &sf, &orders, limit, offset) {
-            Ok(rs) => ok_json(json!({ "ok": true, "records": records_json(&rs) })),
-            Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
-    }
-}
-
-fn records_delete(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if !require_write(principal) {
-        return err_json(StatusCode::FORBIDDEN, "writer authorization required");
-    }
-    let filter = match params.get("filter").map(|f| url_decode(f)) {
-        Some(f) if !f.is_empty() => match parse_filter_param(&f) {
-            Ok(sf) => sf,
-            Err(e) => return err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-        },
-        _ => return err_json(StatusCode::BAD_REQUEST, "expected filter query param"),
-    };
-    match server.engine.lock().unwrap().delete_records(board, &filter) {
-        Ok(deleted) => ok_json(json!({ "ok": true, "deleted": deleted })),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-    }
-}
-
-fn record(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "read") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    let seq: i64 = match params.get("seq").and_then(|s| s.parse().ok()) {
-        Some(s) => s,
-        None => return err_json(StatusCode::BAD_REQUEST, "missing or invalid seq"),
-    };
-    let app = server.engine.lock().unwrap().get_app(board).ok().flatten();
-    let Some(app) = app else {
-        return err_json(StatusCode::NOT_FOUND, "not found");
-    };
-    if !app.public_reads && !require_read(principal) {
-        return err_json(StatusCode::FORBIDDEN, "private board");
-    }
-    match server.engine.lock().unwrap().get_record(board, seq) {
-        Ok(Some(record)) => {
-            if let Some(s) = &principal.scope {
-                if !record_owned(&record, s) {
-                    return err_json(StatusCode::NOT_FOUND, "not found");
-                }
-            }
-            let rec = records_json(&[record]).into_iter().next().unwrap();
-            ok_json(json!({ "ok": true, "record": rec }))
-        }
-        Ok(None) => err_json(StatusCode::NOT_FOUND, "not found"),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-}
-
-fn records_after(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if !require_read(principal) {
-        return err_json(StatusCode::FORBIDDEN, "read authorization required");
-    }
-    let after: i64 = params.get("after").and_then(|v| v.parse().ok()).unwrap_or(0);
-    match server.engine.lock().unwrap().records_after(board, after) {
-        Ok(rs) => ok_json(json!({ "ok": true, "records": records_json(&rs) })),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-}
-
-fn check_scope_owns(server: &Server, board: &str, seq: i64, principal: &Principal) -> Option<Response<BoxBodyResp>> {
-    if let Some(s) = &principal.scope {
-        match server.engine.lock().unwrap().get_record(board, seq) {
-            Ok(Some(rec)) if record_owned(&rec, s) => None,
-            _ => Some(err_json(StatusCode::NOT_FOUND, "not found")),
-        }
-    } else {
-        None
-    }
-}
-
-fn record_put(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    seq: &str,
-    body: &Bytes,
-    _params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "submit") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    let seq: i64 = match seq.parse() {
-        Ok(s) => s,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid seq"),
-    };
-    if !require_write(principal) {
-        return err_json(StatusCode::FORBIDDEN, "writer authorization required");
-    }
-    if let Some(resp) = check_scope_owns(server, board, seq, principal) {
-        return resp;
-    }
-    let payload: Json = match serde_json::from_slice(body) {
-        Ok(p) => p,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid json"),
-    };
-    let writer = principal.writer.clone();
-    let updated = {
-        let mut engine = server.engine.lock().unwrap();
-        engine.set_record(board, seq, payload, writer.as_deref())
-    };
-    match updated {
-        Ok(()) => ok_json(json!({ "ok": true, "seq": seq })),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-    }
-}
-
-fn record_patch(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    seq: &str,
-    body: &Bytes,
-    _params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "submit") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    let seq: i64 = match seq.parse() {
-        Ok(s) => s,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid seq"),
-    };
-    if !require_write(principal) {
-        return err_json(StatusCode::FORBIDDEN, "writer authorization required");
-    }
-    if let Some(resp) = check_scope_owns(server, board, seq, principal) {
-        return resp;
-    }
-    let ops: Json = match serde_json::from_slice(body) {
-        Ok(p) => p,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid json"),
-    };
-    let writer = principal.writer.clone();
-    let patched = {
-        let mut engine = server.engine.lock().unwrap();
-        engine.patch_record(board, seq, &ops, writer.as_deref())
-    };
-    match patched {
-        Ok(merged) => ok_json(json!({ "ok": true, "seq": seq, "payload": merged })),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-    }
-}
-
-fn record_delete(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    seq: &str,
-    _params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "submit") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    let seq: i64 = match seq.parse() {
-        Ok(s) => s,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid seq"),
-    };
-    if !require_write(principal) {
-        return err_json(StatusCode::FORBIDDEN, "writer authorization required");
-    }
-    if let Some(resp) = check_scope_owns(server, board, seq, principal) {
-        return resp;
-    }
-    let deleted = {
-        let mut engine = server.engine.lock().unwrap();
-        engine.delete_record(board, seq)
-    };
-    match deleted {
-        Ok(true) => ok_json(json!({ "ok": true, "seq": seq })),
-        Ok(false) => err_json(StatusCode::NOT_FOUND, "not found"),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-}
-
-fn bulk(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    body: &Bytes,
-    _params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "submit") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    if !require_write(principal) {
-        return err_json(StatusCode::FORBIDDEN, "writer authorization required");
-    }
-    let req: Json = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid json"),
-    };
-    let records: Vec<Json> = match req.get("records").and_then(|r| r.as_array()) {
-        Some(arr) if !arr.is_empty() => arr.clone(),
-        _ => return err_json(StatusCode::BAD_REQUEST, "expected non-empty records array"),
-    };
-    let upsert = req.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
-    let writer = principal.writer.clone();
-    let inserted = {
-        let mut engine = server.engine.lock().unwrap();
-        engine.bulk_insert(board, records, writer.as_deref(), upsert, principal)
-    };
-    match inserted {
-        Ok(seqs) => ok_json(json!({ "ok": true, "inserted": seqs.len(), "seqs": seqs })),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-    }
-}
-
-fn aggregate(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if let Err(e) = rate_action(server, board, principal, "read") {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
-    }
-    if !require_read(principal) {
-        return err_json(StatusCode::FORBIDDEN, "read authorization required");
-    }
-    let agg = match params.get("op").and_then(|o| Agg::parse(o).ok()) {
-        Some(a) => a,
-        None => return err_json(StatusCode::BAD_REQUEST, "missing or invalid op (count, sum, avg, min, max)"),
-    };
-    let field = params.get("field").map(|s| s.to_string());
-    let group_by = params.get("group_by").map(|s| s.to_string());
-    let conds = match params.get("filter").map(|f| url_decode(f)) {
-        Some(f) if !f.is_empty() => match parse_filter_param(&f) {
-            Ok(sf) => sf,
-            Err(e) => return err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-        },
-        _ => SrvFilter::new(),
-    };
-    match server.engine.lock().unwrap().aggregate_records(board, &conds, agg, field.as_deref(), group_by.as_deref()) {
-        Ok(rows) => ok_json(json!({ "ok": true, "aggregate": rows })),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-}
-
-fn join(
-    server: &Server,
-    board: &str,
-    principal: &Principal,
-    params: &HashMap<String, String>,
-) -> Response<BoxBodyResp> {
-    if !require_read(principal) {
-        return err_json(StatusCode::FORBIDDEN, "read authorization required");
-    }
-    if principal.role == "customer" {
-        return err_json(StatusCode::FORBIDDEN, "not permitted for customer keys");
-    }
-    let limit: usize = params
-        .get("limit")
-        .and_then(|l| l.parse().ok())
-        .unwrap_or(50)
-        .clamp(1, 500);
-    let offset: usize = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let conds = match params.get("filter").map(|f| url_decode(f)) {
-        Some(f) if !f.is_empty() => match parse_filter_param(&f) {
-            Ok(sf) => sf,
-            Err(e) => return err_json(StatusCode::BAD_REQUEST, &e.to_string()),
-        },
-        _ => SrvFilter::new(),
-    };
-    match server.engine.lock().unwrap().join_list(board, &conds, limit, offset) {
-        Ok(records) => {
-            let rows: Vec<Json> = records
-                .iter()
-                .map(|r| json!({ "seq": r.seq, "payload": r.payload, "created_at": r.created_at }))
-                .collect();
-            ok_json(json!({ "ok": true, "records": rows }))
-        }
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-}
-
 fn upload(
     server: &Server,
     board: &str,
     principal: &Principal,
     body: &Bytes,
     headers: &http::HeaderMap,
+    params: &HashMap<String, String>,
 ) -> Response<BoxBodyResp> {
     if let Err(e) = rate_action(server, board, principal, "upload") {
         return err_json(StatusCode::TOO_MANY_REQUESTS, &e.to_string());
@@ -940,6 +542,7 @@ fn upload(
     if body.is_empty() {
         return err_json(StatusCode::BAD_REQUEST, "empty file");
     }
+    let table = params.get("table").map(|t| t.as_str()).unwrap_or("files").to_string();
     let content_type = headers
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -953,10 +556,10 @@ fn upload(
     let meta = json!({ "name": filename, "type": content_type });
     let uploaded = {
         let mut engine = server.engine.lock().unwrap();
-        engine.upload(board, &filename, &content_type, body, &meta)
+        engine.upload(board, &table, &filename, &content_type, body, &meta)
     };
     match uploaded {
-        Ok(seq) => ok_json(json!({ "ok": true, "seq": seq })),
+        Ok(seq) => ok_json(json!({ "ok": true, "seq": seq, "table": table })),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -983,8 +586,9 @@ fn file(
     if !app.public_reads && !require_read(principal) {
         return err_json(StatusCode::FORBIDDEN, "private board");
     }
+    let table = params.get("table").map(|t| t.as_str()).unwrap_or("files").to_string();
     let engine = server.engine.lock().unwrap();
-    match engine.download(board, &full) {
+    match engine.download(board, &table, &full) {
         Ok(Some((data, content_type))) => {
             let body = Full::new(Bytes::from(data))
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
@@ -1053,6 +657,6 @@ fn events_inbound(
             return err_json(StatusCode::UNAUTHORIZED, "invalid signature");
         }
     }
-    let _ = engine.dispatch_recipes(board, EventKind::Inbound, None, Some(payload));
+    let _ = engine.dispatch_recipes(board, "inbound", EventKind::Inbound, None, Some(payload));
     ok_json(json!({ "ok": true }))
 }

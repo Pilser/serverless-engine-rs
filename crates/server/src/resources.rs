@@ -8,7 +8,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub fn resource_report(server: &Server, board: &str) -> Value {
     let (records, storage) = {
         let engine = server.engine.lock().unwrap();
-        let records = engine.count_records(board).unwrap_or(0);
+        let mut records: i64 = 0;
+        if let Ok(tables) = engine.list_tables(board) {
+            for t in tables {
+                records += engine.count_records(board, &t.table).unwrap_or(0);
+            }
+        }
         let mut storage: u64 = 0;
         if let Ok(keys) = engine.object_store().list(&format!("{board}/files/")) {
             storage += keys.iter().map(|k| k.size).sum::<u64>();

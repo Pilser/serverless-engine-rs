@@ -127,6 +127,7 @@ async fn run_job(engine: Arc<Mutex<ServerlessEngine>>, job: Job) {
                                 };
                                 let result = engine.lock().unwrap().insert_record(
                                     &job.board_id,
+                                    action.get("table").and_then(|t| t.as_str()).unwrap_or("records"),
                                     record,
                                     Some(&format!("job:{}", job.name)),
                                     false,

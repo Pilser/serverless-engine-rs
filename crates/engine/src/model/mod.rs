@@ -49,6 +49,28 @@ pub struct Board {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableConfig {
+    pub board_id: String,
+    pub table: String,
+    #[serde(default)]
+    pub schema_json: Option<Json>,
+    #[serde(default)]
+    pub unique_key: Option<String>,
+    #[serde(default)]
+    pub computed_json: Option<Json>,
+    #[serde(default)]
+    pub validate_json: Option<Json>,
+    #[serde(default)]
+    pub redact_json: Option<Json>,
+    #[serde(default)]
+    pub ttl_seconds: Option<i64>,
+    #[serde(default)]
+    pub ttl_field: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     pub seq: i64,
     pub payload: Json,
@@ -90,6 +112,8 @@ pub struct Recipe {
     pub dedup_on: Option<String>,
     #[serde(default)]
     pub actions_json: Option<Json>,
+    #[serde(default)]
+    pub table: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +155,9 @@ pub struct JobRun {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Link {
     pub child_board: String,
+    pub child_table: String,
     pub parent_board: String,
+    pub parent_table: String,
     pub from_key: String,
     pub parent_key: String,
 }

@@ -1,5 +1,5 @@
 use crate::model::Key;
-use crate::storage::database::{Cursor, Database, DatabaseCaps, Query, Row};
+use crate::storage::database::{Cursor, Database, DatabaseCaps, Query, Row, TtlClause};
 use crate::storage::ir::SrvFilter;
 use crate::storage::object_store::{BlobMeta, KeyInfo, ObjectStore, ObjectStoreCaps, PutInfo};
 use serde_json::Value as Json;
@@ -185,6 +185,20 @@ impl Database for CachedDatabase {
         let seq = self.inner.upsert(table, key, row)?;
         self.invalidate_table(table);
         Ok(seq)
+    }
+
+    fn aggregate(
+        &self,
+        table: &str,
+        board: &str,
+        table_name: &str,
+        filter: &SrvFilter,
+        agg: crate::storage::ir::Agg,
+        field: Option<&str>,
+        group_by: Option<&str>,
+        ttl: Option<TtlClause>,
+    ) -> anyhow::Result<Vec<Json>> {
+        self.inner.aggregate(table, board, table_name, filter, agg, field, group_by, ttl)
     }
 }
 

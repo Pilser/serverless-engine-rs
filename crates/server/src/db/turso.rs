@@ -26,13 +26,16 @@ CREATE TABLE IF NOT EXISTS srv_board_index (
 const BOARD_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS wb_records (
-    seq INTEGER PRIMARY KEY,
+    seq INTEGER NOT NULL,
     board_id TEXT NOT NULL,
+    table_name TEXT NOT NULL,
     payload TEXT NOT NULL,
     writer TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (table_name, seq)
 );
-CREATE INDEX IF NOT EXISTS idx_wb_records_board ON wb_records(board_id);
+CREATE INDEX IF NOT EXISTS idx_wb_records_board_table ON wb_records(board_id, table_name, seq);
+CREATE INDEX IF NOT EXISTS idx_wb_records_fts ON wb_records USING fts (payload) WITH (tokenizer='ngram');
 ";
 
 fn is_system(table: &str) -> bool {
@@ -65,10 +68,20 @@ fn board_from_key(table: &str, k: &Key) -> Option<String> {
     }
     s.split_once('/').map(|(b, _)| b.to_string())
 }
-
 fn board_from_filter(f: &SrvFilter) -> Option<String> {
     for c in &f.conds {
         if c.field == "$.board_id" && c.op == Op::Eq {
+            if let Some(s) = c.value.as_str() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn table_from_filter(f: &SrvFilter) -> Option<String> {
+    for c in &f.conds {
+        if c.field == "$.table" && c.op == Op::Eq {
             if let Some(s) = c.value.as_str() {
                 return Some(s.to_string());
             }
@@ -120,6 +133,7 @@ fn records_where(
             "$.seq" => Some("seq"),
             "$.writer" => Some("writer"),
             "$.created_at" => Some("created_at"),
+            "$.table" => Some("table_name"),
             "$.board_id" => None,
             _ => None,
         };
@@ -514,14 +528,15 @@ impl Worker {
         })
     }
 
-    fn records_all(&mut self, pool: &Arc<DbPool>, board_id: &str) -> anyhow::Result<Vec<Row>> {
+    fn records_all(&mut self, pool: &Arc<DbPool>, board_id: &str, table: &str) -> anyhow::Result<Vec<Row>> {
         let conn = pool.conn.clone();
         let b = board_id.to_string();
+        let t = table.to_string();
         self.rt.block_on(async {
             let mut rows = conn
                 .query(
-                    "SELECT seq, payload, writer, created_at FROM wb_records WHERE board_id = ?1 ORDER BY seq",
-                    Params::Positional(vec![Value::from(b)]),
+                    "SELECT seq, payload, writer, created_at FROM wb_records WHERE board_id = ?1 AND table_name = ?2 ORDER BY seq",
+                    Params::Positional(vec![Value::from(b), Value::from(t)]),
                 )
                 .await?;
             let mut out = Vec::new();
@@ -535,6 +550,7 @@ impl Worker {
                 let created = row_text(&r, 3)?.unwrap_or_default();
                 let data = json!({
                     "board_id": board_id,
+                    "table": table,
                     "seq": seq,
                     "payload": serde_json::from_str::<Json>(&payload).unwrap_or(Json::Null),
                     "created_at": created,
@@ -552,6 +568,7 @@ impl Worker {
         board_id: &str,
         q: &Query,
     ) -> anyhow::Result<Cursor> {
+        let table = table_from_filter(&q.filter).unwrap_or_default();
         let (where_sql, mut params, search_ph) = records_where(board_id, &q.filter.conds, q.ttl.as_ref())?;
         let mut sql = format!(
             "SELECT seq, payload, writer, created_at FROM wb_records WHERE {where_sql}"
@@ -596,6 +613,7 @@ impl Worker {
                 let created = row_text(&r, 3)?.unwrap_or_default();
                 let data = json!({
                     "board_id": board_id,
+                    "table": table,
                     "seq": seq,
                     "payload": serde_json::from_str::<Json>(&payload).unwrap_or(Json::Null),
                     "created_at": created,
@@ -611,13 +629,19 @@ impl Worker {
         &mut self,
         pool: &Arc<DbPool>,
         board_id: &str,
+        table_name: &str,
         filter: &SrvFilter,
         agg: Agg,
         field: Option<&str>,
         group_by: Option<&str>,
         ttl: Option<&TtlClause>,
     ) -> anyhow::Result<Vec<Json>> {
-        let (where_sql, mut params, _) = records_where(board_id, &filter.conds, ttl)?;
+        let mut conds = vec![
+            FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: Json::String(board_id.to_string()) },
+            FilterCond { field: "$.table".to_string(), op: Op::Eq, value: Json::String(table_name.to_string()) },
+        ];
+        conds.extend(filter.conds.clone());
+        let (where_sql, mut params, _) = records_where(board_id, &conds, ttl)?;
         let target = if agg == Agg::Count {
             "COUNT(*)".to_string()
         } else {
@@ -663,8 +687,8 @@ impl Worker {
         })
     }
 
-    fn records_delete(&mut self, pool: &Arc<DbPool>, board_id: &str, filter: &SrvFilter) -> anyhow::Result<usize> {
-        let all = self.records_all(pool, board_id)?;
+    fn records_delete(&mut self, pool: &Arc<DbPool>, board_id: &str, table: &str, filter: &SrvFilter) -> anyhow::Result<usize> {
+        let all = self.records_all(pool, board_id, table)?;
         let mut seqs: Vec<i64> = all
             .iter()
             .filter(|r| filter.matches(&r.data))
@@ -678,11 +702,12 @@ impl Worker {
         }
         let count = seqs.len();
         let conn = pool.conn.clone();
+        let t = table.to_string();
         self.rt.block_on(async {
             for seq in seqs.drain(..) {
                 conn.execute(
-                    "DELETE FROM wb_records WHERE seq = ?1",
-                    Params::Positional(vec![Value::Integer(seq)]),
+                    "DELETE FROM wb_records WHERE seq = ?1 AND table_name = ?2",
+                    Params::Positional(vec![Value::Integer(seq), Value::from(t.clone())]),
                 )
                 .await?;
             }
@@ -698,6 +723,11 @@ impl Worker {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("record missing board_id"))?
             .to_string();
+        let table = data
+            .get("table")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("record missing table"))?
+            .to_string();
         let seq = match &row.key {
             Key::Int(v) => *v,
             _ => data.get("seq").and_then(|v| v.as_i64()).unwrap_or(0),
@@ -711,12 +741,14 @@ impl Worker {
             .to_string();
         let conn = pool.conn.clone();
         let b = board.clone();
+        let t = table.clone();
         self.rt.block_on(async {
             conn.execute(
-                "INSERT OR REPLACE INTO wb_records (seq, board_id, payload, writer, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR REPLACE INTO wb_records (seq, board_id, table_name, payload, writer, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 Params::Positional(vec![
                     Value::Integer(seq),
                     Value::from(b),
+                    Value::from(t),
                     Value::from(payload),
                     match &writer {
                         Some(w) => Value::from(w.clone()),
@@ -898,8 +930,10 @@ impl Database for TursoDatabase {
             if table == TABLE_RECORDS {
                 let board = board_from_filter(&filter)
                     .ok_or_else(|| anyhow::anyhow!("records delete missing board"))?;
+                let tbl = table_from_filter(&filter)
+                    .ok_or_else(|| anyhow::anyhow!("records delete missing table"))?;
                 let pool = w.board(&board)?;
-                return w.records_delete(&pool, &board, &filter);
+                return w.records_delete(&pool, &board, &tbl, &filter);
             }
             if is_system(&table) {
                 let pool = w.system()?;
@@ -1005,6 +1039,7 @@ impl Database for TursoDatabase {
         &self,
         table: &str,
         board: &str,
+        table_name: &str,
         filter: &SrvFilter,
         agg: engine::storage::ir::Agg,
         field: Option<&str>,
@@ -1036,6 +1071,7 @@ impl Database for TursoDatabase {
             );
         }
         let board = board.to_string();
+        let table_name = table_name.to_string();
         let filter = filter.clone();
         let field = field.map(str::to_string);
         let group_by = group_by.map(str::to_string);
@@ -1044,6 +1080,7 @@ impl Database for TursoDatabase {
             w.records_aggregate_sql(
                 &pool,
                 &board,
+                &table_name,
                 &filter,
                 agg,
                 field.as_deref(),

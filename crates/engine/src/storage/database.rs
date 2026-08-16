@@ -116,10 +116,12 @@ pub trait Database: Send + Sync + 'static {
 
     /// Run an aggregate over `table`, optionally grouped. Default implementation
     /// loads rows and aggregates in Rust; a SQL-capable adapter overrides it.
+    /// `filter` carries only the user's conditions (matched against payload).
     fn aggregate(
         &self,
         table: &str,
         board: &str,
+        table_name: &str,
         filter: &SrvFilter,
         agg: crate::storage::ir::Agg,
         field: Option<&str>,
@@ -128,11 +130,18 @@ pub trait Database: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<Json>> {
         let q = Query {
             filter: crate::storage::ir::SrvFilter {
-                conds: vec![crate::storage::ir::FilterCond {
-                    field: "$.board_id".to_string(),
-                    op: crate::storage::ir::Op::Eq,
-                    value: Json::String(board.to_string()),
-                }],
+                conds: vec![
+                    crate::storage::ir::FilterCond {
+                        field: "$.board_id".to_string(),
+                        op: crate::storage::ir::Op::Eq,
+                        value: Json::String(board.to_string()),
+                    },
+                    crate::storage::ir::FilterCond {
+                        field: "$.table".to_string(),
+                        op: crate::storage::ir::Op::Eq,
+                        value: Json::String(table_name.to_string()),
+                    },
+                ],
             },
             orders: vec![],
             limit: usize::MAX,

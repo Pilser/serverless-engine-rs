@@ -45,7 +45,7 @@ pub fn handle_admin(
         ("DELETE", ["secrets", name]) => Some(remove_secret(server, board, principal, name)),
         ("POST", ["rate"]) => Some(rate_config(server, board, principal, body)),
         ("PUT", ["ttl"]) => Some(ttl_set(server, board, principal, body)),
-        ("DELETE", ["ttl"]) => Some(ttl_clear(server, board, principal)),
+        ("DELETE", ["ttl"]) => Some(ttl_clear(server, board, principal, params)),
         ("PUT", ["link"]) => Some(link_set(server, board, principal, body)),
         ("DELETE", ["link"]) => Some(link_clear(server, board, principal)),
         ("PUT", ["audit"]) => Some(audit_set(server, board, principal, body)),
@@ -264,6 +264,7 @@ fn add_recipe(server: &Server, board: &str, principal: &Principal, body: &Bytes)
         enabled,
         dedup_on,
         actions_json: Some(actions),
+        table: req.get("table").and_then(|t| t.as_str()).map(String::from),
     };
     match server.engine.lock().unwrap().add_recipe(board, &recipe) {
         Ok(()) => json_response(StatusCode::CREATED, json!({ "ok": true, "recipe_id": recipe.name })),
@@ -370,19 +371,21 @@ fn ttl_set(server: &Server, board: &str, principal: &Principal, body: &Bytes) ->
         Ok(v) => v,
         Err(e) => return e,
     };
+    let table = req.get("table").and_then(|t| t.as_str()).unwrap_or("records").to_string();
     let seconds = req.get("seconds").and_then(|s| s.as_i64());
     let field = req.get("field").and_then(|f| f.as_str()).filter(|f| !f.is_empty());
-    match server.engine.lock().unwrap().set_ttl(board, seconds, field) {
-        Ok(()) => ok_json(json!({ "ok": true, "seconds": seconds, "field": field })),
+    match server.engine.lock().unwrap().set_ttl(board, &table, seconds, field) {
+        Ok(()) => ok_json(json!({ "ok": true, "table": table, "seconds": seconds, "field": field })),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
     }
 }
 
-fn ttl_clear(server: &Server, board: &str, principal: &Principal) -> Response<BoxBodyResp> {
+fn ttl_clear(server: &Server, board: &str, principal: &Principal, params: &HashMap<String, String>) -> Response<BoxBodyResp> {
     if let Some(resp) = require_admin_ok(server, principal) {
         return resp;
     }
-    match server.engine.lock().unwrap().clear_ttl(board) {
+    let table = params.get("table").map(|t| t.as_str()).unwrap_or("records").to_string();
+    match server.engine.lock().unwrap().clear_ttl(board, &table) {
         Ok(()) => ok_json(json!({ "ok": true })),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
     }
@@ -403,7 +406,9 @@ fn link_set(server: &Server, board: &str, principal: &Principal, body: &Bytes) -
     ) else {
         return err_json(StatusCode::BAD_REQUEST, "expected on, to and via fields");
     };
-    match server.engine.lock().unwrap().set_link(board, to, on, via) {
+    let child_table = req.get("table").and_then(|t| t.as_str()).unwrap_or("records");
+    let parent_table = req.get("parent_table").and_then(|t| t.as_str()).unwrap_or("records");
+    match server.engine.lock().unwrap().set_link(board, child_table, to, parent_table, on, via) {
         Ok(()) => ok_json(json!({ "ok": true, "on": on, "to": to, "via": via })),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
     }
@@ -474,9 +479,9 @@ fn set_config_kind(
     };
     let mut engine = server.engine.lock().unwrap();
     let res = match kind {
-        "computed" => engine.set_computed(board, &value),
-        "validate" => engine.set_validate(board, &value),
-        "redact" => engine.set_redact(board, &value),
+        "computed" => engine.set_computed(board, "records", &value),
+        "validate" => engine.set_validate(board, "records", &value),
+        "redact" => engine.set_redact(board, "records", &value),
         _ => unreachable!(),
     };
     match res {

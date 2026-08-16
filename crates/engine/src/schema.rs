@@ -1,10 +1,10 @@
-use crate::model::{Board, Key};
+use crate::model::{Key, TableConfig};
 use crate::storage::database::Database;
 use crate::storage::ir::{normalize_path, scalar_text};
-use crate::tables::TABLE_APPS;
+use crate::tables::{scoped_key, TABLE_TABLES};
 use serde_json::Value as Json;
 
-pub fn prepare_payload(_db: &dyn Database, board: &Board, payload: Json) -> anyhow::Result<Json> {
+pub fn prepare_payload(_db: &dyn Database, board: &TableConfig, payload: Json) -> anyhow::Result<Json> {
     let mut prepared = payload;
     apply_computed(board, &mut prepared)?;
     validate_rules(board, &prepared)?;
@@ -12,7 +12,7 @@ pub fn prepare_payload(_db: &dyn Database, board: &Board, payload: Json) -> anyh
     Ok(prepared)
 }
 
-pub fn apply_computed(board: &Board, payload: &mut Json) -> anyhow::Result<()> {
+pub fn apply_computed(board: &TableConfig, payload: &mut Json) -> anyhow::Result<()> {
     let Some(computed) = board.computed_json.as_ref() else {
         return Ok(());
     };
@@ -38,7 +38,7 @@ pub fn apply_computed(board: &Board, payload: &mut Json) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn validate_rules(board: &Board, payload: &Json) -> anyhow::Result<()> {
+pub fn validate_rules(board: &TableConfig, payload: &Json) -> anyhow::Result<()> {
     let Some(rules) = board.validate_json.as_ref() else {
         return Ok(());
     };
@@ -64,7 +64,7 @@ pub fn validate_rules(board: &Board, payload: &Json) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn validate_schema(board: &Board, payload: &Json) -> anyhow::Result<()> {
+pub fn validate_schema(board: &TableConfig, payload: &Json) -> anyhow::Result<()> {
     let Some(schema) = board.schema_json.as_ref() else {
         return Ok(());
     };
@@ -78,7 +78,7 @@ pub fn validate_schema(board: &Board, payload: &Json) -> anyhow::Result<()> {
     }
 }
 
-pub fn apply_redact(board: &Board, payload: &Json) -> Json {
+pub fn apply_redact(board: &TableConfig, payload: &Json) -> Json {
     let Some(redact) = board.redact_json.as_ref() else {
         return payload.clone();
     };
@@ -103,36 +103,52 @@ pub fn apply_redact(board: &Board, payload: &Json) -> Json {
     out
 }
 
-fn save_config(
+fn save_table_config(
     db: &mut dyn Database,
     board_id: &str,
-    apply: impl FnOnce(&mut Board),
+    table: &str,
+    apply: impl FnOnce(&mut TableConfig),
 ) -> anyhow::Result<()> {
-    let mut board = crate::crud::load_board(db, board_id)?;
-    apply(&mut board);
-    db.update(TABLE_APPS, &Key::text(board_id), &serde_json::to_value(&board)?)?;
+    let mut cfg = crate::crud::load_table(db, board_id, table)?;
+    apply(&mut cfg);
+    db.update(TABLE_TABLES, &Key::text(scoped_key(board_id, table)), &serde_json::to_value(&cfg)?)?;
     Ok(())
 }
 
-pub fn computed_set(db: &mut dyn Database, board_id: &str, map: &Json) -> anyhow::Result<()> {
-    save_config(db, board_id, |b| b.computed_json = Some(map.clone()))
+pub fn computed_set(
+    db: &mut dyn Database,
+    board_id: &str,
+    table: &str,
+    map: &Json,
+) -> anyhow::Result<()> {
+    save_table_config(db, board_id, table, |c| c.computed_json = Some(map.clone()))
 }
 
-pub fn validate_set(db: &mut dyn Database, board_id: &str, rules: &Json) -> anyhow::Result<()> {
-    save_config(db, board_id, |b| b.validate_json = Some(rules.clone()))
+pub fn validate_set(
+    db: &mut dyn Database,
+    board_id: &str,
+    table: &str,
+    rules: &Json,
+) -> anyhow::Result<()> {
+    save_table_config(db, board_id, table, |c| c.validate_json = Some(rules.clone()))
 }
 
-pub fn redact_set(db: &mut dyn Database, board_id: &str, paths: &Json) -> anyhow::Result<()> {
-    save_config(db, board_id, |b| b.redact_json = Some(paths.clone()))
+pub fn redact_set(
+    db: &mut dyn Database,
+    board_id: &str,
+    table: &str,
+    paths: &Json,
+) -> anyhow::Result<()> {
+    save_table_config(db, board_id, table, |c| c.redact_json = Some(paths.clone()))
 }
 
 pub fn check_unique(
     db: &dyn Database,
-    board: &Board,
+    table_cfg: &TableConfig,
     payload: &Json,
     exclude_seq: Option<i64>,
 ) -> anyhow::Result<()> {
-    let Some(key) = board.unique_key.as_deref() else {
+    let Some(key) = table_cfg.unique_key.as_deref() else {
         return Ok(());
     };
     let path = normalize_path(key);
@@ -141,9 +157,14 @@ pub fn check_unique(
         return Ok(());
     }
     let text = scalar_text(&value);
-    if let Some(existing) =
-        crate::crud::find_unique_holder(db, &board.board_id, &path, &text, exclude_seq)?
-    {
+    if let Some(existing) = crate::crud::find_unique_holder(
+        db,
+        &table_cfg.board_id,
+        &table_cfg.table,
+        &path,
+        &text,
+        exclude_seq,
+    )? {
         anyhow::bail!(
             "duplicate value '{text}' for unique field {key} (already record seq {existing})"
         );

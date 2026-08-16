@@ -16,6 +16,7 @@ pub const TABLE_JOB_RUNS: &str = "wb_job_runs";
 pub const TABLE_INDEX: &str = "srv_board_index";
 pub const TABLE_USERS: &str = "wb_users";
 pub const TABLE_SESSIONS: &str = "wb_sessions";
+pub const TABLE_TABLES: &str = "wb_tables";
 
 pub fn scoped_key(board_id: &str, name: &str) -> String {
     format!("{board_id}/{name}")

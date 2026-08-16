@@ -348,7 +348,14 @@ pub fn registry() -> Vec<CommandSpec> {
             r#type: ArgType::Board,
             required: true,
             help: "The board id.".into(),
-        }],
+        },
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+        ],
         flags: vec![],
         body_json: Some(serde_json::json!({
             "type": "object",
@@ -377,7 +384,14 @@ pub fn registry() -> Vec<CommandSpec> {
             r#type: ArgType::Board,
             required: true,
             help: "The board id.".into(),
-        }],
+        },
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+        ],
         flags: vec![
             FlagSpec {
                 name: "filter".into(),
@@ -427,6 +441,12 @@ pub fn registry() -> Vec<CommandSpec> {
                 help: "The board id.".into(),
             },
             ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+            ArgSpec {
                 name: "seq".into(),
                 r#type: ArgType::Seq,
                 required: true,
@@ -454,7 +474,14 @@ pub fn registry() -> Vec<CommandSpec> {
             r#type: ArgType::Board,
             required: true,
             help: "The board id.".into(),
-        }],
+        },
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+        ],
         flags: vec![
             FlagSpec {
                 name: "limit".into(),
@@ -504,6 +531,12 @@ pub fn registry() -> Vec<CommandSpec> {
                 help: "The board id.".into(),
             },
             ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+            ArgSpec {
                 name: "q".into(),
                 r#type: ArgType::Str,
                 required: true,
@@ -547,6 +580,12 @@ pub fn registry() -> Vec<CommandSpec> {
                 help: "The board id.".into(),
             },
             ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+            ArgSpec {
                 name: "seq".into(),
                 r#type: ArgType::Seq,
                 required: true,
@@ -578,7 +617,14 @@ pub fn registry() -> Vec<CommandSpec> {
             r#type: ArgType::Board,
             required: true,
             help: "The board id.".into(),
-        }],
+        },
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+        ],
         flags: vec![
             FlagSpec {
                 name: "format".into(),
@@ -640,6 +686,78 @@ pub fn registry() -> Vec<CommandSpec> {
         ],
         see_also: vec!["records.submit".into(), "records.bulk".into()],
         danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "tables".into(),
+        verb: "create".into(),
+        summary: "Create a table (collection) inside a board.".into(),
+        description: "Creates a named table with an optional JSON Schema and unique key. Records live in tables; a board is a tenant that owns many tables.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "table".into(), r#type: ArgType::Name, required: true, help: "The table name.".into() },
+        ],
+        flags: vec![
+            FlagSpec { name: "schema".into(), r#type: FlagType::Json, default: None, allowed: vec![], repeatable: false, help: "JSON Schema (Draft 2020-12).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "unique_key".into(), r#type: FlagType::Path, default: None, allowed: vec![], repeatable: false, help: "JSON path used for upsert conflict detection.".into(), conflicts: vec![], requires: vec![] },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "table": { "table": "learners" } }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "tables create b_abc learners --schema '{\"type\":\"object\"}'".into(),
+            description: "Create a table with a schema.".into(),
+            response: serde_json::json!({ "ok": true, "table": { "table": "learners" } }),
+        }],
+        see_also: vec!["tables.list".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "tables".into(),
+        verb: "list".into(),
+        summary: "List the tables of a board.".into(),
+        description: "Returns every table (collection) defined on the board.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "tables": [] }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "tables list b_abc".into(),
+            description: "List tables.".into(),
+            response: serde_json::json!({ "ok": true, "tables": [] }),
+        }],
+        see_also: vec!["tables.create".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "tables".into(),
+        verb: "delete".into(),
+        summary: "Drop a table and all its records.".into(),
+        description: "Permanently removes the table config and every record in it.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "table".into(), r#type: ArgType::Name, required: true, help: "The table name.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "deleted": true }),
+        auth: Role::Admin,
+        destructive: true,
+        dry_run: true,
+        examples: vec![Example {
+            args: "tables delete b_abc learners".into(),
+            description: "Drop a table.".into(),
+            response: serde_json::json!({ "ok": true, "deleted": true }),
+        }],
+        see_also: vec!["tables.list".into()],
+        danger_notes: Some("irreversibly removes all records in the table".into()),
     });
 
     specs.push(CommandSpec {

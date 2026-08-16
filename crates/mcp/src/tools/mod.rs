@@ -3,6 +3,7 @@ pub mod files;
 pub mod jobs;
 pub mod recipes;
 pub mod records;
+pub mod secrets;
 pub mod tables;
 
 use engine::model::Principal;
@@ -33,6 +34,9 @@ pub fn run(
         "tables.create" => tables::create(engine, principal, arguments),
         "tables.list" => tables::list(engine, principal, arguments),
         "tables.delete" => tables::delete(engine, principal, arguments),
+        "secrets.set" => secrets::set(engine, principal, arguments),
+        "secrets.list" => secrets::list(engine, principal, arguments),
+        "secrets.delete" => secrets::delete(engine, principal, arguments),
         "recipes.list" => recipes::list(engine, principal, arguments),
         "recipes.add" => recipes::add(engine, principal, arguments),
         "files.list" => files::list(engine, principal, arguments),

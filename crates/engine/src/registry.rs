@@ -761,6 +761,76 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "secrets".into(),
+        verb: "set".into(),
+        summary: "Store an encrypted secret for a board.".into(),
+        description: "Saves a named secret (AES-256-GCM encrypted at rest). Never returned as plaintext; use {secret:name} in recipe $call actions.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Secret name (stored uppercased).".into() },
+            ArgSpec { name: "value".into(), r#type: ArgType::Str, required: true, help: "The secret value.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "set": "NAME" }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "secrets set b_abc AFRICASTALKING_API_KEY sk_live_xxx".into(),
+            description: "Store a secret.".into(),
+            response: serde_json::json!({ "ok": true, "set": "AFRICASTALKING_API_KEY" }),
+        }],
+        see_also: vec!["secrets.list".into()],
+        danger_notes: Some("the value is never echoed back; store carefully".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "secrets".into(),
+        verb: "list".into(),
+        summary: "List a board's secret names and fingerprints.".into(),
+        description: "Returns secret names and fingerprints only — never plaintext values.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "secrets": [{ "name": "API_KEY", "fingerprint": "abc123" }] }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "secrets list b_abc".into(),
+            description: "List secret names.".into(),
+            response: serde_json::json!({ "ok": true, "secrets": [] }),
+        }],
+        see_also: vec!["secrets.set".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "secrets".into(),
+        verb: "delete".into(),
+        summary: "Delete a board secret.".into(),
+        description: "Removes a named secret so {secret:name} placeholders no longer resolve.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Secret name.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "deleted": true }),
+        auth: Role::Admin,
+        destructive: true,
+        dry_run: true,
+        examples: vec![Example {
+            args: "secrets delete b_abc API_KEY".into(),
+            description: "Delete a secret.".into(),
+            response: serde_json::json!({ "ok": true, "deleted": true }),
+        }],
+        see_also: vec!["secrets.list".into()],
+        danger_notes: Some("the secret can no longer be resolved".into()),
+    });
+
+    specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "list".into(),
         summary: "List automation recipes for a board.".into(),

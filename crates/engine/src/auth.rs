@@ -2,6 +2,8 @@ use crate::model::{Key, KeyRecord, Principal};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
 use crate::tables::{scoped_key, TABLE_KEYS, TABLE_SESSIONS, TABLE_USERS};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
 
@@ -148,6 +150,14 @@ pub fn resolve_principal(
                 writer: Some(u.email.clone()),
             });
         }
+        if let Some(u) = resolve_jwt_user(board_id, t) {
+            return Ok(Principal {
+                id: u.email.clone(),
+                role: u.role.clone(),
+                scope: None,
+                writer: Some(u.email.clone()),
+            });
+        }
         if let Some(kr) = find_active_key(db, board_id, t)? {
             return Ok(Principal {
                 id: kr.bucket.clone(),
@@ -242,13 +252,15 @@ pub fn user_signup(
     Ok(user)
 }
 
-/// Verify credentials and create a session token.
+/// Verify credentials and create a session token plus an optional signed JWT.
+/// Returns `(opaque_token, jwt)`. The opaque token is revocable via logout; the
+/// JWT is a self-contained HS256-signed credential (expiry 7 days).
 pub fn user_login(
     db: &mut dyn Database,
     board_id: &str,
     email: &str,
     password: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, String)> {
     let row = find_user(db, board_id, email)?
         .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
     let stored = row
@@ -258,17 +270,98 @@ pub fn user_login(
     if !bcrypt::verify(password, stored)? {
         anyhow::bail!("invalid email or password");
     }
+    let email = row["email"].as_str().unwrap_or(email).to_string();
+    let role = row["role"].as_str().unwrap_or("reader").to_string();
+    let now = now_iso();
     let token = uuid::Uuid::new_v4().to_string();
     let session = json!({
         "token": token,
         "board_id": board_id,
-        "email": row["email"].as_str().unwrap_or(email).to_string(),
-        "role": row["role"].as_str().unwrap_or("reader").to_string(),
+        "email": email,
+        "role": role,
         "expires_at": expires_iso(),
-        "created_at": now_iso(),
+        "created_at": now,
     });
     db.insert(TABLE_SESSIONS, Row::new(Key::text(&token), session))?;
-    Ok(token)
+    let jwt = issue_jwt(board_id, &email, &role);
+    Ok((token, jwt))
+}
+
+fn issue_jwt(board_id: &str, email: &str, role: &str) -> String {
+    let claims = json!({
+        "sub": email,
+        "board": board_id,
+        "role": role,
+        "iat": now_iso(),
+        "exp": expires_iso(),
+    });
+    sign_jwt(&claims, &crate::secrets::master_key())
+}
+
+fn resolve_jwt_user(board_id: &str, token: &str) -> Option<User> {
+    let claims = verify_jwt(token, &crate::secrets::master_key())?;
+    if claims.get("board").and_then(|b| b.as_str()) != Some(board_id) {
+        return None;
+    }
+    let exp = claims.get("exp").and_then(|e| e.as_str()).unwrap_or("");
+    if !exp.is_empty() && exp < now_iso().as_str() {
+        return None;
+    }
+    let email = claims.get("sub").and_then(|s| s.as_str())?.to_string();
+    let role = claims.get("role").and_then(|r| r.as_str()).unwrap_or("reader").to_string();
+    Some(User { email, board_id: board_id.to_string(), role, created_at: now_iso() })
+}
+
+fn b64url(data: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(data)
+}
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut k = key.to_vec();
+    if k.len() > BLOCK {
+        k = Sha256::digest(&k).to_vec();
+    }
+    k.resize(BLOCK, 0);
+    let mut ipad = [0x36u8; BLOCK];
+    let mut opad = [0x5cu8; BLOCK];
+    for i in 0..BLOCK {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let mut inner = Vec::with_capacity(BLOCK + data.len());
+    inner.extend_from_slice(&ipad);
+    inner.extend_from_slice(data);
+    let inner = Sha256::digest(&inner);
+    let mut outer = Vec::with_capacity(BLOCK + 32);
+    outer.extend_from_slice(&opad);
+    outer.extend_from_slice(&inner);
+    Sha256::digest(&outer).into()
+}
+
+fn sign_jwt(claims: &Json, secret: &[u8; 32]) -> String {
+    let header = json!({ "alg": "HS256", "typ": "JWT" });
+    let h = b64url(header.to_string().as_bytes());
+    let p = b64url(claims.to_string().as_bytes());
+    let input = format!("{h}.{p}");
+    let sig = b64url(&hmac_sha256(secret, input.as_bytes()));
+    format!("{input}.{sig}")
+}
+
+fn verify_jwt(token: &str, secret: &[u8; 32]) -> Option<Json> {
+    let mut parts = token.split('.');
+    let h = parts.next()?;
+    let p = parts.next()?;
+    let sig = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let input = format!("{h}.{p}");
+    if sig != b64url(&hmac_sha256(secret, input.as_bytes())) {
+        return None;
+    }
+    let payload = URL_SAFE_NO_PAD.decode(p).ok()?;
+    serde_json::from_slice(&payload).ok()
 }
 
 /// Resolve a session token to its user, if present and unexpired.

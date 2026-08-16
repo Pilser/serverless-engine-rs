@@ -41,7 +41,7 @@ pub fn login(server: &Server, board: &str, body: &Bytes) -> Response<BoxBodyResp
     let email = req.get("email").and_then(|e| e.as_str()).unwrap_or("").to_string();
     let password = req.get("password").and_then(|p| p.as_str()).unwrap_or("").to_string();
     match server.engine.lock().unwrap().login_user(board, &email, &password) {
-        Ok(token) => ok_json(json!({ "ok": true, "token": token })),
+        Ok((token, jwt)) => ok_json(json!({ "ok": true, "token": token, "jwt": jwt })),
         Err(e) => err_json(StatusCode::UNAUTHORIZED, &e.to_string()),
     }
 }

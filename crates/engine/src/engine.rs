@@ -321,7 +321,7 @@ impl ServerlessEngine {
         board_id: &str,
         email: &str,
         password: &str,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<(String, String)> {
         crate::auth::user_login(self.db.as_mut(), board_id, email, password)
     }
 

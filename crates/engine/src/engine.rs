@@ -414,6 +414,10 @@ impl ServerlessEngine {
         crate::secrets::secret_list(self.db.as_ref(), board_id)
     }
 
+    pub fn secrets_map(&self, board_id: &str) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        crate::secrets::secrets_map(self.db.as_ref(), board_id)
+    }
+
     pub fn remove_secret(&mut self, board_id: &str, name: &str) -> anyhow::Result<()> {
         crate::secrets::secret_remove(self.db.as_mut(), board_id, name)
     }

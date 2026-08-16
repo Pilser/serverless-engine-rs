@@ -348,6 +348,48 @@ fn subst_strings(v: &mut Json, payload: &Json) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Replace `{secret:name}` placeholders with the decrypted secret value.
+pub fn resolve_secret_placeholders(
+    secrets: &std::collections::HashMap<String, String>,
+    text: &str,
+) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{secret:") {
+        let Some(rel_end) = rest[start + 8..].find('}') else {
+            break;
+        };
+        let name = &rest[start + 8..start + 8 + rel_end];
+        out.push_str(&rest[..start]);
+        if let Some(v) = secrets.get(name) {
+            out.push_str(v);
+        }
+        rest = &rest[start + 8 + rel_end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+pub fn subst_secret_json(
+    secrets: &std::collections::HashMap<String, String>,
+    v: &mut Json,
+) {
+    match v {
+        Json::String(s) => *s = resolve_secret_placeholders(secrets, s),
+        Json::Array(a) => {
+            for el in a.iter_mut() {
+                subst_secret_json(secrets, el);
+            }
+        }
+        Json::Object(m) => {
+            for val in m.values_mut() {
+                subst_secret_json(secrets, val);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn run_actions(
     db: &mut dyn Database,
     board_id: &str,
@@ -456,8 +498,9 @@ fn apply_action(
         }
         "$call" | "$notify" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("{key} must be an object"))?;
-            let url = str_field(obj, "url")?;
-            if !valid_url(url) {
+            let secrets = crate::secrets::secrets_map(db, board_id)?;
+            let url = resolve_secret_placeholders(&secrets, str_field(obj, "url")?);
+            if !valid_url(&url) {
                 anyhow::bail!("ssrf-blocked url '{url}'");
             }
             let timeout = obj.get("timeout_ms").and_then(|t| t.as_u64()).unwrap_or(15_000);
@@ -465,13 +508,13 @@ fn apply_action(
             if let Some(h) = obj.get("headers") {
                 if let Some(o) = h.as_object() {
                     for (k, v) in o {
-                        headers.push((k.clone(), v.as_str().unwrap_or("").to_string()));
+                        headers.push((k.clone(), resolve_secret_placeholders(&secrets, v.as_str().unwrap_or(""))));
                     }
                 } else if let Some(arr) = h.as_array() {
                     for el in arr {
                         if let Some(pair) = el.as_array() {
                             if pair.len() == 2 {
-                                headers.push((pair[0].as_str().unwrap_or("").to_string(), pair[1].as_str().unwrap_or("").to_string()));
+                                headers.push((pair[0].as_str().unwrap_or("").to_string(), resolve_secret_placeholders(&secrets, pair[1].as_str().unwrap_or(""))));
                             }
                         }
                     }
@@ -479,7 +522,8 @@ fn apply_action(
             }
             let mut body = obj.get("body").cloned().unwrap_or(Json::Null);
             subst_strings(&mut body, payload)?;
-            let (status, _) = crate::http::http_call(url, &headers, &body, timeout)?;
+            subst_secret_json(&secrets, &mut body);
+            let (status, _) = crate::http::http_call(&url, &headers, &body, timeout)?;
             logs.push(format!("call {url} -> {status}"));
         }
         "$format" => {

@@ -604,8 +604,8 @@ fn file(
 }
 
 fn call(
-    _server: &Server,
-    _board: &str,
+    server: &Server,
+    board: &str,
     principal: &Principal,
     body: &Bytes,
 ) -> Response<BoxBodyResp> {
@@ -620,14 +620,26 @@ fn call(
         Some(u) if !u.is_empty() => u.to_string(),
         _ => return err_json(StatusCode::BAD_REQUEST, "missing url"),
     };
-    let headers: Vec<(String, String)> = match req.get("headers").and_then(|h| h.as_object()) {
+    let mut headers: Vec<(String, String)> = match req.get("headers").and_then(|h| h.as_object()) {
         Some(map) => map
             .iter()
             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
             .collect(),
         None => Vec::new(),
     };
-    match engine::automation::srv_http_call(&url, &headers, &req.get("body").cloned().unwrap_or(Json::Null)) {
+    let secrets = server
+        .engine
+        .lock()
+        .unwrap()
+        .secrets_map(board)
+        .unwrap_or_default();
+    let url = engine::automation::resolve_secret_placeholders(&secrets, &url);
+    for (_, v) in headers.iter_mut() {
+        *v = engine::automation::resolve_secret_placeholders(&secrets, v);
+    }
+    let mut call_body = req.get("body").cloned().unwrap_or(Json::Null);
+    engine::automation::subst_secret_json(&secrets, &mut call_body);
+    match engine::automation::srv_http_call(&url, &headers, &call_body) {
         Ok(res) => ok_json(json!({ "ok": true, "status": 200, "body": res })),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
     }

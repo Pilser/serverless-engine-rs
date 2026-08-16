@@ -1,0 +1,9 @@
+[build]
+# Lower parallel codegen to fit the 7.6GiB machine (4 cores).
+jobs = 4
+
+[target.x86_64-unknown-linux-gnu]
+# Use the linker that ships with the rust toolchain (much faster than `cc`/`bfd`).
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Optional: shrink codegen memory with thinner debuginfo handled in Cargo.toml profiles.

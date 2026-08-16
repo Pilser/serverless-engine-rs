@@ -1,0 +1,46 @@
+# Ignore everything by default (whitelist style, mirroring the parent repo)
+*
+
+# Allow essential root files
+!.gitignore
+!.env.example
+!AGENTS.md
+!README.md
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+
+# Allow cargo build configuration
+!.cargo/
+!.cargo/**
+
+# Allow source code and docs
+!crates/
+!crates/**
+!docs/
+!docs/**
+
+# --- Still ignore build artifacts, runtime data and secrets (inside allowed dirs) ---
+target/
+**/target/
+waos-data/
+**/waos-data/
+*.db
+**/*.db
+*.db-wal
+**/*.db-wal
+*.db-shm
+**/*.db-shm
+*.env
+**/.env
+.env.*
+**/.env.*
+!.env.example
+token*
+**/token*
+*token*
+**/*token*
+*.log
+**/*.log
+.DS_Store
+**/.DS_Store

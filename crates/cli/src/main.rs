@@ -24,8 +24,28 @@ fn run(args: &[String]) -> anyhow::Result<String> {
     let daemon = daemon_url();
     let specs = registry::load();
 
-    if args.is_empty() || args[0] == "--help" || args[0] == "help" {
+    if args.is_empty() || args[0] == "--help" {
         return Ok(registry::help_index(&specs));
+    }
+    // `help [group] [verb]` delegates to the same dispatch as `--help`, but a
+    // bare `help` still prints the index.
+    if args[0] == "help" {
+        let rest = &args[1..];
+        if rest.is_empty() {
+            return Ok(registry::help_index(&specs));
+        }
+        if rest.first().map(|s| s.as_str()) == Some("reference") {
+            return Ok(registry::reference(&specs));
+        }
+        if rest.first().map(|s| s.as_str()) == Some("about") {
+            return Ok(registry::about());
+        }
+        let group = rest[0].clone();
+        if rest.len() == 1 {
+            return Ok(registry::group_help(&specs, &group));
+        }
+        let verb = rest[1].clone();
+        return Ok(registry::verb_help(&specs, &format!("{group}.{verb}")));
     }
     if args[0] == "about" {
         return Ok(registry::about());

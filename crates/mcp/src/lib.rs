@@ -87,7 +87,7 @@ pub fn schema_for(spec: &CommandSpec) -> Json {
         props.insert(
             arg.name.clone(),
             json!({
-                "type": json_type(&arg.r#type),
+                "type": json_types(&arg.r#type),
                 "description": arg.help,
             }),
         );
@@ -96,10 +96,13 @@ pub fn schema_for(spec: &CommandSpec) -> Json {
         }
     }
     for flag in &spec.flags {
-        let t = match flag.r#type {
-            engine::registry::FlagType::Bool => "boolean",
-            engine::registry::FlagType::Int => "integer",
-            _ => "string",
+        let t: Json = match flag.r#type {
+            engine::registry::FlagType::Bool => Json::String("boolean".to_string()),
+            engine::registry::FlagType::Int => Json::String("integer".to_string()),
+            engine::registry::FlagType::Json => {
+                Json::Array(vec![Json::String("object".to_string()), Json::String("array".to_string())])
+            }
+            _ => Json::String("string".to_string()),
         };
         let mut p = json!({ "type": t, "description": flag.help });
         if let Some(d) = &flag.default {
@@ -121,10 +124,11 @@ pub fn schema_for(spec: &CommandSpec) -> Json {
     })
 }
 
-fn json_type(t: &ArgType) -> &'static str {
+fn json_types(t: &ArgType) -> Json {
     match t {
-        ArgType::Int | ArgType::Seq => "integer",
-        _ => "string",
+        ArgType::Json => Json::Array(vec![Json::String("object".to_string()), Json::String("array".to_string())]),
+        ArgType::Int | ArgType::Seq => Json::String("integer".to_string()),
+        _ => Json::String("string".to_string()),
     }
 }
 

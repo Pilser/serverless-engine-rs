@@ -213,6 +213,15 @@ pub async fn handle(
     Ok(resp)
 }
 
+fn has_file_ext(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let Some(dot) = name.rfind('.') else {
+        return false;
+    };
+    // Ignore dots in the leading position (hidden files) and require a real ext.
+    dot > 0 && dot < name.len() - 1
+}
+
 fn static_site(
     server: &Server,
     board: &str,
@@ -229,13 +238,18 @@ fn static_site(
     if rel.is_empty() {
         target = "index.html".to_string();
     }
-    let fetched = engine.get_asset(board, &target).ok().flatten().or_else(|| {
+    let mut fetched = engine.get_asset(board, &target).ok().flatten().or_else(|| {
         if !target.ends_with(".html") {
             engine.get_asset(board, &format!("{target}/index.html")).ok().flatten()
         } else {
             None
         }
     });
+    // SPA fallback: an unknown path with no file extension (a client-side route)
+    // serves index.html so React Router can handle it.
+    if fetched.is_none() && !has_file_ext(&target) {
+        fetched = engine.get_asset(board, "index.html").ok().flatten();
+    }
     let Some((data, content_type)) = fetched else {
         return Some(err_json(StatusCode::NOT_FOUND, "not found"));
     };

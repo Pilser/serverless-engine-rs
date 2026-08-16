@@ -1,8 +1,8 @@
 use crate::model::{Key, KeyRecord, Principal};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
-use crate::tables::TABLE_KEYS;
-use serde_json::Value as Json;
+use crate::tables::{scoped_key, TABLE_KEYS, TABLE_SESSIONS, TABLE_USERS};
+use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
 
 pub fn role_rank(role: &str) -> u8 {
@@ -140,6 +140,14 @@ pub fn resolve_principal(
                 writer: None,
             });
         }
+        if let Some(u) = resolve_session(db, board_id, t)? {
+            return Ok(Principal {
+                id: u.email.clone(),
+                role: u.role.clone(),
+                scope: None,
+                writer: Some(u.email.clone()),
+            });
+        }
         if let Some(kr) = find_active_key(db, board_id, t)? {
             return Ok(Principal {
                 id: kr.bucket.clone(),
@@ -173,4 +181,138 @@ pub fn require_role(principal: &Principal, min: u8) -> anyhow::Result<()> {
         anyhow::bail!("forbidden: requires role rank {min} (principal role: {})", principal.role);
     }
     Ok(())
+}
+
+// ---- user auth (password login + sessions) --------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct User {
+    pub email: String,
+    pub board_id: String,
+    pub role: String,
+    pub created_at: String,
+}
+
+const SESSION_TTL_SECS: i64 = 60 * 60 * 24 * 7;
+
+fn now_iso() -> String {
+    crate::crud::now_str()
+}
+
+fn expires_iso() -> String {
+    crate::crud::subtract_seconds(&now_iso(), -SESSION_TTL_SECS)
+}
+
+fn user_key(board_id: &str, email: &str) -> Key {
+    Key::text(scoped_key(board_id, &email.to_lowercase()))
+}
+
+fn find_user(db: &dyn Database, board_id: &str, email: &str) -> anyhow::Result<Option<Json>> {
+    Ok(db.get(TABLE_USERS, &user_key(board_id, email))?.map(|r| r.data))
+}
+
+/// Create a user. `role` is clamped: only an admin/owner caller may set a role
+/// above reader; otherwise the new user is a reader.
+pub fn user_signup(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    password: &str,
+    role: &str,
+    caller: &Principal,
+) -> anyhow::Result<User> {
+    if email.is_empty() || password.len() < 6 {
+        anyhow::bail!("email and a password of at least 6 characters are required");
+    }
+    let email = email.to_lowercase();
+    if find_user(db, board_id, &email)?.is_some() {
+        anyhow::bail!("user already exists");
+    }
+    let granted = if role_rank(&caller.role) >= role_rank("admin") { role } else { "reader" };
+    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)?;
+    let user = User {
+        email: email.clone(),
+        board_id: board_id.to_string(),
+        role: granted.to_string(),
+        created_at: now_iso(),
+    };
+    let mut data = serde_json::to_value(&user)?;
+    data["password_hash"] = Json::String(password_hash);
+    db.insert(TABLE_USERS, Row::new(user_key(board_id, &email), data))?;
+    Ok(user)
+}
+
+/// Verify credentials and create a session token.
+pub fn user_login(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    password: &str,
+) -> anyhow::Result<String> {
+    let row = find_user(db, board_id, email)?
+        .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
+    let stored = row
+        .get("password_hash")
+        .and_then(|h| h.as_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
+    if !bcrypt::verify(password, stored)? {
+        anyhow::bail!("invalid email or password");
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    let session = json!({
+        "token": token,
+        "board_id": board_id,
+        "email": row["email"].as_str().unwrap_or(email).to_string(),
+        "role": row["role"].as_str().unwrap_or("reader").to_string(),
+        "expires_at": expires_iso(),
+        "created_at": now_iso(),
+    });
+    db.insert(TABLE_SESSIONS, Row::new(Key::text(&token), session))?;
+    Ok(token)
+}
+
+/// Resolve a session token to its user, if present and unexpired.
+pub fn resolve_session(
+    db: &dyn Database,
+    board_id: &str,
+    token: &str,
+) -> anyhow::Result<Option<User>> {
+    let Some(row) = db.get(TABLE_SESSIONS, &Key::text(token))? else {
+        return Ok(None);
+    };
+    let s = row.data;
+    if s.get("board_id").and_then(|b| b.as_str()) != Some(board_id) {
+        return Ok(None);
+    }
+    if let Some(exp) = s.get("expires_at").and_then(|e| e.as_str()) {
+        if !exp.is_empty() && exp < now_iso().as_str() {
+            return Ok(None);
+        }
+    }
+    let email = s.get("email").and_then(|e| e.as_str()).unwrap_or("").to_string();
+    let role = s.get("role").and_then(|r| r.as_str()).unwrap_or("reader").to_string();
+    Ok(Some(User {
+        email,
+        board_id: board_id.to_string(),
+        role,
+        created_at: now_iso(),
+    }))
+}
+
+/// Revoke a session token.
+pub fn user_logout(db: &mut dyn Database, token: &str) -> anyhow::Result<bool> {
+    let existed = db.get(TABLE_SESSIONS, &Key::text(token))?.is_some();
+    if existed {
+        db.delete(
+            TABLE_SESSIONS,
+            &SrvFilter {
+                conds: vec![FilterCond {
+                    field: "$.token".to_string(),
+                    op: Op::Eq,
+                    value: Json::String(token.to_string()),
+                }],
+            },
+        )?;
+    }
+    Ok(existed)
 }

@@ -15,6 +15,7 @@ base64 = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
+bcrypt = { workspace = true }
 jsonschema = { workspace = true }
 
 [dev-dependencies]

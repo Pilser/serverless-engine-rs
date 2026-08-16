@@ -3,7 +3,7 @@ use engine::storage::database::{Cursor, Database, DatabaseCaps, Query, Row, TtlC
 use engine::storage::ir::{normalize_path, scalar_text, Agg, FilterCond, Op, SrvFilter};
 use engine::tables::{
     TABLE_APPS, TABLE_AUDIT, TABLE_HOOK_DELIVERIES, TABLE_INDEX, TABLE_JOBS, TABLE_JOB_RUNS,
-    TABLE_KEYS, TABLE_LINKS, TABLE_RECORDS,
+    TABLE_KEYS, TABLE_LINKS, TABLE_RECORDS, TABLE_SESSIONS, TABLE_USERS,
 };
 use serde_json::{json, Value as Json};
 use std::cmp::Ordering;
@@ -38,7 +38,13 @@ CREATE INDEX IF NOT EXISTS idx_wb_records_board ON wb_records(board_id);
 fn is_system(table: &str) -> bool {
     matches!(
         table,
-        TABLE_KEYS | TABLE_JOBS | TABLE_JOB_RUNS | TABLE_HOOK_DELIVERIES | TABLE_INDEX
+        TABLE_KEYS
+            | TABLE_JOBS
+            | TABLE_JOB_RUNS
+            | TABLE_HOOK_DELIVERIES
+            | TABLE_INDEX
+            | TABLE_USERS
+            | TABLE_SESSIONS
     )
 }
 

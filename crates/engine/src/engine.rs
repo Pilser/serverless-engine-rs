@@ -305,6 +305,38 @@ impl ServerlessEngine {
         crate::auth::revoke_key(self.db.as_mut(), bucket)
     }
 
+    pub fn signup_user(
+        &mut self,
+        board_id: &str,
+        email: &str,
+        password: &str,
+        role: &str,
+        caller: &Principal,
+    ) -> anyhow::Result<crate::auth::User> {
+        crate::auth::user_signup(self.db.as_mut(), board_id, email, password, role, caller)
+    }
+
+    pub fn login_user(
+        &mut self,
+        board_id: &str,
+        email: &str,
+        password: &str,
+    ) -> anyhow::Result<String> {
+        crate::auth::user_login(self.db.as_mut(), board_id, email, password)
+    }
+
+    pub fn logout_user(&mut self, token: &str) -> anyhow::Result<bool> {
+        crate::auth::user_logout(self.db.as_mut(), token)
+    }
+
+    pub fn user_by_token(
+        &self,
+        board_id: &str,
+        token: &str,
+    ) -> anyhow::Result<Option<crate::auth::User>> {
+        crate::auth::resolve_session(self.db.as_ref(), board_id, token)
+    }
+
     pub fn resolve_principal(
         &self,
         board_id: &str,

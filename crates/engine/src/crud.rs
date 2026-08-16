@@ -337,8 +337,9 @@ pub fn app_delete(db: &mut dyn Database, board_id: &str, owner: &str) -> anyhow:
     if !owned {
         anyhow::bail!("board {board_id} is not owned by {owner}");
     }
-    db.delete(TABLE_RECORDS, &SrvFilter { conds: vec![board_cond(board_id)] })?;
-    db.delete(TABLE_TABLES, &SrvFilter { conds: vec![board_cond(board_id)] })?;
+    for cfg in table_list(db, board_id)? {
+        table_delete(db, board_id, &cfg.table)?;
+    }
     db.delete(TABLE_APPS, &SrvFilter { conds: vec![board_cond(board_id)] })?;
     Ok(())
 }

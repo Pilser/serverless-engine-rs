@@ -1,4 +1,4 @@
-use engine::http::HttpCaller;
+use engine::http::{HttpBody, HttpCaller};
 use serde_json::Value as Json;
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
@@ -54,7 +54,7 @@ impl HttpCaller for ReqwestCaller {
         &self,
         url: &str,
         headers: &[(String, String)],
-        body: &Json,
+        body: &HttpBody,
         timeout_ms: u64,
     ) -> anyhow::Result<(u16, Json)> {
         let host = host_of(url).unwrap_or_default();
@@ -65,9 +65,17 @@ impl HttpCaller for ReqwestCaller {
         for (k, v) in headers {
             req = req.header(k, v);
         }
-        if !body.is_null() {
-            req = req.header("content-type", "application/json");
-            req = req.body(body.to_string());
+        match body {
+            HttpBody::Json(j) => {
+                if !j.is_null() {
+                    req = req.header("content-type", "application/json");
+                    req = req.body(j.to_string());
+                }
+            }
+            HttpBody::Raw { content_type, bytes } => {
+                req = req.header("content-type", content_type.as_str());
+                req = req.body(bytes.clone());
+            }
         }
         let resp = req.send()?;
         let status = resp.status().as_u16();

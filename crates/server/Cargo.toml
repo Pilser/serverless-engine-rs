@@ -17,7 +17,7 @@ rand = { workspace = true }
 uuid = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
 tracing = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "http2", "rustls-tls", "rustls-tls-webpki-roots"] }
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", features = ["sink"] }
 turso = { path = "../../../turso/bindings/rust", optional = true }

@@ -3,7 +3,7 @@ use crate::model::{Key, Principal, Recipe};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{normalize_path, scalar_text, FilterCond, Op, SrvFilter};
 use crate::tables::{scoped_key, TABLE_RECIPES, TABLE_RECIPE_RUNS};
-use serde_json::Value as Json;
+use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
 
 pub use crate::webhooks::valid_url;
@@ -348,6 +348,30 @@ fn subst_strings(v: &mut Json, payload: &Json) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Percent-encode a `{k: v}` map into `application/x-www-form-urlencoded`.
+fn urlencode_form(form: &Json) -> String {
+    fn enc(s: &str) -> String {
+        let mut out = String::new();
+        for b in s.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(*b as char);
+                }
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{:02X}", b)),
+            }
+        }
+        out
+    }
+    let mut parts = Vec::new();
+    if let Some(map) = form.as_object() {
+        for (k, v) in map {
+            parts.push(format!("{}={}", enc(k), enc(&crate::storage::ir::scalar_text(v))));
+        }
+    }
+    parts.join("&")
+}
+
 /// Replace `{secret:name}` placeholders with the decrypted secret value.
 pub fn resolve_secret_placeholders(
     secrets: &std::collections::HashMap<String, String>,
@@ -523,7 +547,21 @@ fn apply_action(
             let mut body = obj.get("body").cloned().unwrap_or(Json::Null);
             subst_strings(&mut body, payload)?;
             subst_secret_json(&secrets, &mut body);
-            let (status, _) = crate::http::http_call(&url, &headers, &body, timeout)?;
+            let content_type = obj.get("content_type").and_then(|c| c.as_str()).unwrap_or("application/json").to_string();
+            let http_body = if let Some(form) = body.get("form") {
+                let encoded = urlencode_form(form);
+                crate::http::HttpBody::Raw {
+                    content_type: "application/x-www-form-urlencoded".to_string(),
+                    bytes: encoded.into_bytes(),
+                }
+            } else if !content_type.starts_with("application/json") {
+                let text = body.as_str().map(str::to_string).unwrap_or_else(|| crate::storage::ir::scalar_text(&body));
+                crate::http::HttpBody::Raw { content_type, bytes: text.into_bytes() }
+            } else {
+                crate::http::HttpBody::Json(body)
+            };
+            let (status, resp_body) = crate::http::http_call_body(&url, &headers, &http_body, timeout)?;
+            set_at(payload, "$.call_result", json!({ "status": status, "body": resp_body }))?;
             logs.push(format!("call {url} -> {status}"));
         }
         "$format" => {

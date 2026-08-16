@@ -1,9 +1,9 @@
 # serverlessEngine-rs — Implementation Plan
 
-> **Status:** Planning · **Owner:** WAOS project
+> **Status:** Planning · **Owner:** serverlessEngine-rs
 >
 > **Companion docs** (in this folder):
-> - `serverless-engine-features.md` — full feature inventory of the existing WAOS engine (the behavioral reference)
+> - `serverless-engine-features.md` — full feature inventory of the existing reference engine (the behavioral reference)
 > - `serverless-engine-gap-analysis.md` — gap matrix + storage abstraction design (the "why")
 > - `cli-mcp-interface-design.md` — the CLI ↔ MCP control surface spec (help layers, error contract, registry; referenced by Phase 4)
 >
@@ -18,7 +18,7 @@ Build a standalone, embeddable **`serverlessEngine-rs`** crate plus an optional 
 1. The **crate** is a pure library: no HTTP, no transport, no DB driver, no object-store SDK. It owns the engine logic, the query IR, the event model, and two pluggable storage traits (`Database`, `ObjectStore`).
 2. The **server** provides every adapter and transport: DB backends (Turso/local, Postgres, …), object stores (FS, S3/R2/GCS, …), REST/WebSocket/SSE, identity, job/pubsub brokers, observability.
 3. **Compute needs are met declaratively** — expressions, computed fields, validation rules, recipes, scheduled jobs, and outbound calls — with **no user-provided code (no WASM) in this phase**. WASM is deferred to a future phase (see §5).
-4. The existing WAOS engine is the reference implementation: **its tests are the behavioral contract** the new crate must satisfy.
+4. The existing reference engine in zerowrapper/ is the reference implementation: **its tests are the behavioral contract** the new crate must satisfy.
 
 ---
 
@@ -132,7 +132,7 @@ serverless-engine/                          ← git repo root (crate workspace)
 | Daemon (hosts engine + MCP over HTTP) | `server` + `mcp` |
 | OTel / Prometheus exporters | `server/observability` |
 
-**Rule:** `engine` must compile and pass tests with **zero** external I/O dependencies (only in-memory adapters). This keeps it embeddable (a single process, like the current WAOS engine) or distributable (behind `server`).
+**Rule:** `engine` must compile and pass tests with **zero** external I/O dependencies (only in-memory adapters). This keeps it embeddable (a single process, like the current reference engine) or distributable (behind `server`).
 
 ---
 
@@ -217,7 +217,7 @@ Both traits default to in-memory implementations in `engine` for tests/embedded 
 3. `server/transport/rest.rs` — mirror the current `/api/srv/{board_id}/*` surface exactly.
 4. `auth.rs` + `server/identity/keys.rs` — issue/hash/scope (fix: salted hashes, key prefix, expiry).
 5. Rate limiting behind a `RateStore` trait with an in-memory impl.
-6. **Test gate:** port `ch-web-ui/tests/cors_preflight.rs` + HTTP-level tests; full parity with the WAOS REST surface.
+6. **Test gate:** port `ch-web-ui/tests/cors_preflight.rs` + HTTP-level tests; full parity with the reference REST surface.
 
 ### Phase 3 — Automation & realtime (async, outbox)
 1. Port `zw-recipe` engine + actions + `zw-db/recipes.rs`.

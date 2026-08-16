@@ -30,7 +30,7 @@ pub fn json_response(status: StatusCode, value: Json) -> Response<BoxBodyResp> {
         .status(status)
         .header("content-type", "application/json")
         .header("access-control-allow-origin", "*")
-        .header("access-control-allow-headers", "Authorization, Content-Type, X-Filename, X-Hub-Signature-256, X-WAOS-Key")
+        .header("access-control-allow-headers", "Authorization, Content-Type, X-Filename, X-Hub-Signature-256, X-Srv-Key")
         .header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         .body(BoxBody::new(body))
         .unwrap()
@@ -45,7 +45,7 @@ pub fn with_cors(mut resp: Response<BoxBodyResp>) -> Response<BoxBodyResp> {
     resp.headers_mut().insert(
         "access-control-allow-headers",
         HeaderValue::from_static(
-            "Authorization, Content-Type, X-Filename, X-Hub-Signature-256, X-WAOS-Key",
+            "Authorization, Content-Type, X-Filename, X-Hub-Signature-256, X-Srv-Key",
         ),
     );
     resp.headers_mut().insert(

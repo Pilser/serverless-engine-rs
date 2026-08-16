@@ -13,8 +13,8 @@ use std::collections::HashMap;
 const NONCE_LEN: usize = 12;
 
 fn master_key() -> [u8; 32] {
-    const DEV: &str = "waos-fixed-dev-master-key-do-not-use-in-production";
-    let gen = match std::env::var("WAOS_SECRET_KEY") {
+    const DEV: &str = "srv-fixed-dev-master-key-do-not-use-in-production";
+    let gen = match std::env::var("SRV_SECRET_KEY") {
         Ok(k) if !k.is_empty() => k,
         _ => DEV.to_string(),
     };

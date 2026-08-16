@@ -13,7 +13,7 @@ recipes/automation, cron/jobs, webhooks, secrets, TTL, audit, links, files, real
 two pluggable storage traits `Database` + `ObjectStore`), plus an embeddable `crates/server`, an
 `crates/mcp` tool server, and a `crates/cli` (`srv` CLI = MCP client over HTTP).
 
-The existing WAOS engine in `zerowrapper/` is the reference implementation. **Its tests are the
+The existing reference engine in `zerowrapper/` is the reference implementation. **Its tests are the
 behavioral contract** the new engine must satisfy.
 
 ## Read these FIRST (before any implementation)

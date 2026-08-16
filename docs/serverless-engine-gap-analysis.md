@@ -1,6 +1,6 @@
-# Gap Analysis: From WAOS Serverless Engine → a True Full Serverless Engine
+# Gap Analysis: From the reference serverless engine → a True Full Serverless Engine
 
-> **Purpose:** This document is the design foundation for a dedicated, standalone **`serverlessEngine-rs`** crate + an embeddable serverless server built on it. It (a) defines what "true serverless" means, (b) audits the current WAOS engine against that bar, (c) specifies the abstraction layers the new crate must provide (pluggable databases, pluggable object storage), and (d) scopes where each responsibility lives — crate vs. server.
+> **Purpose:** This document is the design foundation for a dedicated, standalone **`serverlessEngine-rs`** crate + an embeddable serverless server built on it. It (a) defines what "true serverless" means, (b) audits the current reference engine against that bar, (c) specifies the abstraction layers the new crate must provide (pluggable databases, pluggable object storage), and (d) scopes where each responsibility lives — crate vs. server.
 >
 > Companion doc: `serverless-engine-features.md` (the complete feature inventory of the current engine).
 
@@ -45,7 +45,7 @@ Around that crate sits a **server** (also Rust) that provides:
 
 Legend: ✅ done · 🟡 partial (works but not at serverless scale) · ❌ absent.
 
-| Area | WAOS today | Gap | Priority |
+| Area | Reference engine today | Gap | Priority |
 |---|---|---|---|
 | Document store (CRUD, patch, bulk, unique/upsert) | ✅ | — | — |
 | Filter DSL / JSON-path query | 🟡 AND-only, no `$or`, no nested logic, JSON-path column casts only | Nested boolean logic, typed secondary indexes, geospatial, projections | High |
@@ -281,7 +281,7 @@ serverless-server/                    (the embeddable server — adapters + tran
 7. **Tooling** — granular MCP tools + `srv` CLI over MCP.
 8. **Ops** — quotas, billing meters, observability, replication.
 
-The existing WAOS engine is a working reference: its tests (`zw-db/tests/`, `zw-recipe/tests/`) are the behavioral contract that the new crate must pass.
+The existing reference engine is a working reference: its tests (`zw-db/tests/`, `zw-recipe/tests/`) are the behavioral contract that the new crate must pass.
 
 ---
 

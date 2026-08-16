@@ -14,7 +14,7 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
 
 pub fn x_token(headers: &HeaderMap) -> Option<String> {
     headers
-        .get("X-WAOS-Key")
+        .get("X-Srv-Key")
         .or_else(|| headers.get("X-Api-Key"))
         .and_then(|v| v.to_str().ok())
         .filter(|s| !s.is_empty())

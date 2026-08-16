@@ -114,7 +114,7 @@ fn cmd_daemon(args: &[String]) -> anyhow::Result<String> {
         other => Ok(format!(
             "usage: srv daemon start [--db <dir>]\n\
              note: daemon hosts the engine + MCP over HTTP; other surfaces connect to it.\n\
-             --db <dir>   data directory (default ./waos-data; or $SRV_DATA_DIR / .env)\n\
+             --db <dir>   data directory (default ./data; or $SRV_DATA_DIR / .env)\n\
              env: SRV_HOST SRV_PORT SRV_DATA_DIR SRV_DB SRV_HTTP_TIMEOUT_MS (see .env.example)\n\
              got: '{:?}'\n",
             other

@@ -16,7 +16,7 @@ impl Default for Config {
         Self {
             host: "127.0.0.1".to_string(),
             port: 7070,
-            data_dir: PathBuf::from("waos-data"),
+            data_dir: PathBuf::from("data"),
             backend: "turso".to_string(),
             http_timeout_ms: 15_000,
         }
@@ -35,7 +35,7 @@ impl Config {
             port: get(&dotenv, "SRV_PORT", "7070")
                 .parse()
                 .unwrap_or(7070),
-            data_dir: PathBuf::from(get(&dotenv, "SRV_DATA_DIR", "waos-data")),
+            data_dir: PathBuf::from(get(&dotenv, "SRV_DATA_DIR", "data")),
             backend: get(&dotenv, "SRV_DB", "turso"),
             http_timeout_ms: get(&dotenv, "SRV_HTTP_TIMEOUT_MS", "15000")
                 .parse()

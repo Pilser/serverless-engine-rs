@@ -1,4 +1,4 @@
-# WAOS Serverless Engine — Full Feature Reference
+# serverlessEngine — Full Feature Reference
 
 > **Scope:** This document covers ONLY the serverless engine (the `zw-db` data layer, the `zw-expr` expression language, the `zw-recipe` automation engine, and the `ch-web-ui` HTTP/WebSocket/SSE transport that exposes it). It does **not** cover the chat, whiteboard, materials, channel, or ZeroClaw plumbing of zerowrapper, except where they intersect the engine.
 >
@@ -48,7 +48,7 @@
 
 ## 1. Executive Summary
 
-The WAOS serverless engine is an embeddable, schema-flexible document/database platform. It gives every board (a.k.a. *serverless app*) a JSON-document store with:
+serverlessEngine is an embeddable, schema-flexible document/database platform. It gives every board (a.k.a. *serverless app*) a JSON-document store with:
 
 - MongoDB-style patch operations, JSON-path filtering, BM25 full-text search, aggregation
 - Optional JSON Schema (Draft 2020-12) validation, expression-driven computed fields, validation rules, and read-time redaction
@@ -179,7 +179,7 @@ A board is the top-level container — the "serverless app". Stored as a row in 
 - **List** — `srv_app_list(owner)` ordered by `created_at`.
 - **Update** — `srv_app_update(board_id, owner, title?, schema?, public_reads?, unique_key?)`; each field optional; `None` clears.
 - **Delete** — `srv_app_delete(board_id, owner)` — removes board + all its records in a single `BEGIN…COMMIT`.
-- **Export / Import** — `srv apps export <board>` produces `{format:"waos-srv-app", app, rate, ttl, audit, link, hooks, records}` (records paged 500/batch); `srv apps import` recreates board, bulk-inserts records, restores rate/ttl/audit/link/hooks. Hook secrets are re-registered without the secret.
+- **Export / Import** — `srv apps export <board>` produces `{format:"srv-app", app, rate, ttl, audit, link, hooks, records}` (records paged 500/batch); `srv apps import` recreates board, bulk-inserts records, restores rate/ttl/audit/link/hooks. Hook secrets are re-registered without the secret.
 
 ---
 
@@ -390,7 +390,7 @@ Enforcement is twofold:
 ## 13. Secrets (`secrets.rs`)
 
 - Per-board key-value store `wb_app_secrets` (names stored **uppercased**).
-- **Encryption at rest**: AES-256-GCM, fresh random 12-byte nonce per value, output `base64(nonce ‖ ciphertext)`. Master key derived from env `WAOS_SECRET_KEY` (32 bytes, cycled); dev fallback otherwise.
+- **Encryption at rest**: AES-256-GCM, fresh random 12-byte nonce per value, output `base64(nonce ‖ ciphertext)`. Master key derived from env `SRV_SECRET_KEY` (32 bytes, cycled); dev fallback otherwise.
 - Fingerprint = SHA-256 of plaintext (so lists identify secrets without exposing them).
 - Secrets are decrypted **only for the recipe engine** (`srv_secrets_map`) — never serialized to clients.
 
@@ -403,7 +403,7 @@ Enforcement is twofold:
 - On every record event (created/updated/deleted), a delivery row is enqueued per registered URL in the **system-DB** queue `wb_hook_deliveries` (event JSON captured).
 - Worker (every 2 s, batch 64) POSTs to the URL with:
   - body = the event JSON with `hooks_secret` injected
-  - header `X-WAOS-Signature: base64(HMAC-SHA256(body, secret))`
+  - header `X-Srv-Signature: base64(HMAC-SHA256(body, secret))`
   - 10 s timeout, SSRF guard per URL.
 - **Retry**: max 5 attempts, backoff `[0, 1, 5, 30, 120]` s. 2xx → delivered; non-2xx → backoff; 5th failure → dormant (undelivered).
 - Replay: `srv_hook_reschedule` re-dues all undelivered attempts ≤ 5.
@@ -413,7 +413,7 @@ Enforcement is twofold:
 - If the board has a `webhook_secret`: requires header `X-Hub-Signature-256: sha256=<hex>` matching `HMAC-SHA256(body, secret)` (hex), else 401.
 - On success (202) it runs every board recipe with `EventKind::Inbound`, with board secrets injected.
 
-> Signature asymmetry: outbound uses **base64** `X-WAOS-Signature`; inbound uses **hex** `X-Hub-Signature-256` (GitHub-style).
+> Signature asymmetry: outbound uses **base64** `X-Srv-Signature`; inbound uses **hex** `X-Hub-Signature-256` (GitHub-style).
 
 ---
 

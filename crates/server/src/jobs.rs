@@ -251,7 +251,7 @@ async fn deliver(
     let sig = engine::webhooks::hmac_base64(&body_str, &secret);
     let result = client
         .post(&url)
-        .header("X-WAOS-Signature", sig)
+        .header("X-Srv-Signature", sig)
         .body(body_str)
         .timeout(Duration::from_secs(10))
         .send()

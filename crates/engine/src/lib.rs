@@ -8,6 +8,7 @@ pub mod events;
 pub mod expr;
 pub mod files;
 pub mod http;
+pub mod import;
 pub mod jobs;
 pub mod migrations;
 pub mod model;

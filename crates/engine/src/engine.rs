@@ -2,7 +2,7 @@ use crate::model::{Board, KeyRecord, Principal, Recipe, Record, Secret};
 use crate::storage::database::{Database, DatabaseCaps};
 use crate::storage::ir::{Agg, SrvFilter};
 use crate::storage::object_store::ObjectStore;
-use serde_json::Value as Json;
+use serde_json::{json, Value as Json};
 use std::sync::Arc;
 
 pub type Notify = Arc<dyn Fn(String, String, i64, Json) + Send + Sync>;
@@ -113,6 +113,41 @@ impl ServerlessEngine {
             self.emit(board_id, "created", *seq, record);
         }
         Ok(seqs)
+    }
+
+    /// Import records from a JSON (array/JSONL) or CSV dump. Each row is
+    /// validated against the board schema; invalid rows are skipped and
+    /// reported rather than aborting the whole import.
+    pub fn import_records(
+        &mut self,
+        board_id: &str,
+        format: &str,
+        data: &str,
+        separator: char,
+        upsert: bool,
+        principal: &Principal,
+    ) -> anyhow::Result<Json> {
+        let records = crate::import::parse(format, data, separator)?;
+        let mut seqs = Vec::new();
+        let mut errors = Vec::new();
+        for record in records {
+            match self.insert_record(
+                board_id,
+                record.clone(),
+                Some(&principal.id),
+                upsert,
+                principal,
+            ) {
+                Ok(seq) => seqs.push(seq),
+                Err(e) => errors.push(json!({ "record": record, "error": e.to_string() })),
+            }
+        }
+        Ok(json!({
+            "total": seqs.len() + errors.len(),
+            "inserted": seqs.len(),
+            "seqs": seqs,
+            "errors": errors,
+        }))
     }
 
     pub fn get_record(&self, board_id: &str, seq: i64) -> anyhow::Result<Option<Record>> {

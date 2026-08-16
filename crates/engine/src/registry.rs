@@ -569,6 +569,80 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "records".into(),
+        verb: "import".into(),
+        summary: "Bulk-import records from a JSON or CSV dump.".into(),
+        description: "Parses a JSON array/JSONL or CSV (header row) dump and inserts each row as a record, validating against the board schema. Invalid rows are skipped and reported; valid rows are inserted.".into(),
+        positional: vec![ArgSpec {
+            name: "board".into(),
+            r#type: ArgType::Board,
+            required: true,
+            help: "The board id.".into(),
+        }],
+        flags: vec![
+            FlagSpec {
+                name: "format".into(),
+                r#type: FlagType::Str,
+                default: Some("json".into()),
+                allowed: vec![],
+                repeatable: false,
+                help: "Input format: json (array or JSONL) or csv.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "data".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "The dump content (JSON array/JSONL, or CSV with a header row).".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "separator".into(),
+                r#type: FlagType::Str,
+                default: Some(",".into()),
+                allowed: vec![],
+                repeatable: false,
+                help: "CSV field separator (default ',').".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "upsert".into(),
+                r#type: FlagType::Bool,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Upsert on unique_key conflicts.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "total": 3, "inserted": 3, "seqs": [1, 2, 3], "errors": [] }),
+        auth: Role::Writer,
+        destructive: false,
+        dry_run: false,
+        examples: vec![
+            Example {
+                args: "records import b_abc --format json --data '[{\"name\":\"ada\"},{\"name\":\"zed\"}]'".into(),
+                description: "Import a JSON array.".into(),
+                response: serde_json::json!({ "ok": true, "total": 2, "inserted": 2, "seqs": [1, 2], "errors": [] }),
+            },
+            Example {
+                args: "records import b_abc --format csv --data 'name,score\\nada,85\\nzed,90'".into(),
+                description: "Import CSV with a header row.".into(),
+                response: serde_json::json!({ "ok": true, "total": 2, "inserted": 2, "seqs": [1, 2], "errors": [] }),
+            },
+        ],
+        see_also: vec!["records.submit".into(), "records.bulk".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "list".into(),
         summary: "List automation recipes for a board.".into(),

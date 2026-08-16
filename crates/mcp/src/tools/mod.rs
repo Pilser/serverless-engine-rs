@@ -28,6 +28,7 @@ pub fn run(
         "records.query" => records::query(engine, principal, arguments),
         "records.search" => records::search(engine, principal, arguments),
         "records.delete" => records::delete(engine, principal, arguments),
+        "records.import" => records::import_records(engine, principal, arguments),
         "recipes.list" => recipes::list(engine, principal, arguments),
         "recipes.add" => recipes::add(engine, principal, arguments),
         "files.list" => files::list(engine, principal, arguments),

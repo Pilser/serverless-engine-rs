@@ -20,6 +20,26 @@ pub fn submit(
     ok(json!({ "seq": seq }))
 }
 
+pub fn import_records(
+    engine: &mut ServerlessEngine,
+    principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let format = arguments.get("format").and_then(|f| f.as_str()).unwrap_or("json").to_string();
+    let data = arg_str(arguments, "data")?;
+    let separator = arguments
+        .get("separator")
+        .and_then(|s| s.as_str())
+        .and_then(|s| s.chars().next())
+        .unwrap_or(',');
+    let upsert = arguments.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
+    let report = engine
+        .import_records(&board, &format, &data, separator, upsert, principal)
+        .map_err(|e| e.to_string())?;
+    ok(report)
+}
+
 pub fn get(
     engine: &ServerlessEngine,
     _principal: &Principal,

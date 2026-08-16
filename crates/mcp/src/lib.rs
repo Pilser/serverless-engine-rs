@@ -137,14 +137,21 @@ pub fn handle_jsonrpc(mcp: &McpServer, body: &str) -> String {
     let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(Json::Null);
     let resp = match method {
-        "initialize" => json!({
-            "jsonrpc": "2.0", "id": id,
-            "result": {
-                "protocolVersion": "2026-08-01",
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "serverless-engine", "version": engine::version() },
-            }
-        }),
+        "initialize" => {
+            let requested = params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("2025-06-18")
+                .to_string();
+            json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {
+                    "protocolVersion": requested,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "serverless-engine", "version": engine::version() },
+                }
+            })
+        }
         "tools/list" => json!({ "jsonrpc": "2.0", "id": id, "result": mcp.tools_list() }),
         "tools/call" => {
             let name = params
@@ -165,6 +172,7 @@ pub fn handle_jsonrpc(mcp: &McpServer, body: &str) -> String {
             }
         }
         "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+        _ if method.starts_with("notifications/") => json!({}),
         _ => json!({
             "jsonrpc": "2.0", "id": id,
             "error": { "code": -32601, "message": format!("method not found: {method}") }

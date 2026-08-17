@@ -2,10 +2,12 @@ pub mod apps;
 pub mod auth;
 pub mod files;
 pub mod jobs;
+pub mod keys;
 pub mod recipes;
 pub mod records;
 pub mod secrets;
 pub mod tables;
+pub mod users;
 
 use engine::model::Principal;
 use engine::registry::CommandSpec;
@@ -28,6 +30,8 @@ pub fn run(
         "auth.signup" => auth::signup(engine, principal, arguments),
         "auth.login" => auth::login(engine, principal, arguments),
         "auth.me" => auth::me(engine, principal, arguments),
+        "users.list" => users::list(engine, principal, arguments),
+        "keys.list" => keys::list(engine, principal, arguments),
         "records.submit" => records::submit(engine, principal, arguments),
         "records.get" => records::get(engine, principal, arguments),
         "records.list" => records::list(engine, principal, arguments),

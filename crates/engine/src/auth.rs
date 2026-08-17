@@ -221,6 +221,22 @@ fn find_user(db: &dyn Database, board_id: &str, email: &str) -> anyhow::Result<O
     Ok(db.get(TABLE_USERS, &user_key(board_id, email))?.map(|r| r.data))
 }
 
+/// List the users of a board (email, role, created_at — never the hash).
+pub fn user_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<User>> {
+    let q = Query {
+        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    let mut out = Vec::new();
+    for row in db.query(TABLE_USERS, &q)?.rows {
+        out.push(serde_json::from_value(row.data)?);
+    }
+    Ok(out)
+}
+
 /// Create a user. `role` is clamped: only an admin/owner caller may set a role
 /// above reader; otherwise the new user is a reader.
 /// Two modes, chosen per-call:

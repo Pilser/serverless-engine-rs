@@ -911,6 +911,48 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "users".into(),
+        verb: "list".into(),
+        summary: "List a board's users (email, role, created_at).".into(),
+        description: "Returns every user of the board with their role and creation time — never password hashes. The engine equivalent of a sqlite `select` over the auth users table.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "users": [{ "email": "a@x.ug", "role": "teacher", "board_id": "b_abc", "created_at": "..." }] }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "users list b_abc".into(),
+            description: "List all users on the board.".into(),
+            response: serde_json::json!({ "ok": true, "users": [] }),
+        }],
+        see_also: vec!["auth.signup".into(), "auth.me".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "keys".into(),
+        verb: "list".into(),
+        summary: "List a board's API keys.".into(),
+        description: "Returns each API key's name, role, scope and revoked state — never the secret or its hash fingerprint.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "keys": [{ "name": "waos", "role": "admin", "scope": null, "revoked": false }] }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "keys list b_abc".into(),
+            description: "List API keys on the board.".into(),
+            response: serde_json::json!({ "ok": true, "keys": [] }),
+        }],
+        see_also: vec![],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "list".into(),
         summary: "List automation recipes for a board.".into(),

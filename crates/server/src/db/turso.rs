@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS wb_records (
     created_at TEXT NOT NULL,
     PRIMARY KEY (table_name, seq)
 );
+DROP INDEX IF EXISTS idx_wb_records_fts;
 CREATE INDEX IF NOT EXISTS idx_wb_records_board_table ON wb_records(board_id, table_name, seq);
-CREATE INDEX IF NOT EXISTS idx_wb_records_fts ON wb_records USING fts (payload) WITH (tokenizer='ngram');
 ";
 
 fn is_system(table: &str) -> bool {
@@ -124,9 +124,8 @@ fn records_where(
     for c in conds {
         if c.op == Op::Search {
             let qph = params.len() + 1;
-            params.push(Value::from(scalar_text(&c.value)));
-            parts.push(format!("fts_match(payload, ?{qph})"));
-            search_ph = Some(qph);
+            params.push(Value::from(like_fragment(&c.value)));
+            parts.push(format!("LOWER(payload) LIKE LOWER(?{qph}) ESCAPE '\\'"));
             continue;
         }
         let column = match c.field.as_str() {
@@ -501,8 +500,17 @@ impl Worker {
         })
     }
 
-    fn kv_rows(&mut self, pool: &Arc<DbPool>, table: &str) -> anyhow::Result<Vec<Row>> {
+    fn pool_tx(&mut self, board: &str, sql: &str) -> anyhow::Result<()> {
+        let pool = self.board(board)?;
         let conn = pool.conn.clone();
+        let sql = sql.to_string();
+        self.rt.block_on(async {
+            conn.execute(&sql, Params::Positional(vec![])).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }
+
+    fn kv_rows(&mut self, pool: &Arc<DbPool>, table: &str) -> anyhow::Result<Vec<Row>> {        let conn = pool.conn.clone();
         let prefix = format!("{table}/");
         self.rt.block_on(async {
             let mut rows = conn
@@ -1116,5 +1124,20 @@ impl Database for TursoDatabase {
             }
             Ok(0)
         })
+    }
+
+    fn begin(&mut self, board: &str) -> anyhow::Result<()> {
+        let board = board.to_string();
+        self.call(move |w| w.pool_tx(&board, "BEGIN"))
+    }
+
+    fn commit(&mut self, board: &str) -> anyhow::Result<()> {
+        let board = board.to_string();
+        self.call(move |w| w.pool_tx(&board, "COMMIT"))
+    }
+
+    fn rollback(&mut self, board: &str) -> anyhow::Result<()> {
+        let board = board.to_string();
+        self.call(move |w| w.pool_tx(&board, "ROLLBACK"))
     }
 }

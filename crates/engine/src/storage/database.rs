@@ -114,6 +114,23 @@ pub trait Database: Send + Sync + 'static {
 
     fn upsert(&mut self, table: &str, key: &str, row: Row) -> anyhow::Result<i64>;
 
+    /// Begin a write transaction scoped to a board's shard. Default is a no-op
+    /// (memory backend and non-transactional adapters). Used by bulk loads to
+    /// amortize commit/sync cost across many record inserts.
+    fn begin(&mut self, _board: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Commit an open board transaction started with [`Database::begin`].
+    fn commit(&mut self, _board: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Roll back an open board transaction started with [`Database::begin`].
+    fn rollback(&mut self, _board: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Run an aggregate over `table`, optionally grouped. Default implementation
     /// loads rows and aggregates in Rust; a SQL-capable adapter overrides it.
     /// `filter` carries only the user's conditions (matched against payload).

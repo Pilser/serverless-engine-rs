@@ -187,6 +187,18 @@ impl Database for CachedDatabase {
         Ok(seq)
     }
 
+    fn begin(&mut self, board: &str) -> anyhow::Result<()> {
+        self.inner.begin(board)
+    }
+
+    fn commit(&mut self, board: &str) -> anyhow::Result<()> {
+        self.inner.commit(board)
+    }
+
+    fn rollback(&mut self, board: &str) -> anyhow::Result<()> {
+        self.inner.rollback(board)
+    }
+
     fn aggregate(
         &self,
         table: &str,

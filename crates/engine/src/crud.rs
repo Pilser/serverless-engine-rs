@@ -134,12 +134,19 @@ fn find_record(db: &dyn Database, board_id: &str, table: &str, seq: i64) -> anyh
 }
 
 fn next_seq(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<i64> {
-    let mut max = 0i64;
-    for row in scan_rows(db, board_id, table)? {
-        if let Some(s) = row.data.get("seq").and_then(|v| v.as_i64()) {
-            max = max.max(s);
-        }
-    }
+    let q = Query {
+        filter: SrvFilter { conds: vec![board_cond(board_id), table_cond(table)] },
+        orders: vec![],
+        limit: 1,
+        offset: 0,
+        ttl: None,
+    };
+    let max = db
+        .query(TABLE_RECORDS, &q)?
+        .rows
+        .first()
+        .and_then(|r| r.data.get("seq").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
     Ok(max + 1)
 }
 
@@ -158,16 +165,28 @@ pub fn find_unique_holder(
     text: &str,
     exclude_seq: Option<i64>,
 ) -> anyhow::Result<Option<i64>> {
-    for row in scan_rows(db, board_id, table)? {
-        let rec: Record = serde_json::from_value(row.data)?;
-        if let Some(e) = exclude_seq {
-            if rec.seq == e {
-                continue;
-            }
+    let q = Query {
+        filter: SrvFilter {
+            conds: vec![
+                board_cond(board_id),
+                table_cond(table),
+                FilterCond { field: path.to_string(), op: Op::Eq, value: Json::String(text.to_string()) },
+            ],
+        },
+        orders: vec![],
+        limit: 2,
+        offset: 0,
+        ttl: None,
+    };
+    for row in db.query(TABLE_RECORDS, &q)?.rows {
+        let payload = row.data.get("payload").cloned().unwrap_or(Json::Null);
+        let value = crate::expr::get_path(&payload, path);
+        if scalar_text(&value) != text {
+            continue;
         }
-        let value = crate::expr::get_path(&rec.payload, path);
-        if scalar_text(&value) == text {
-            return Ok(Some(rec.seq));
+        let seq = row.data.get("seq").and_then(|v| v.as_i64());
+        if seq != exclude_seq {
+            return Ok(seq);
         }
     }
     Ok(None)
@@ -401,11 +420,24 @@ pub fn record_bulk_insert(
     upsert: bool,
     principal: &Principal,
 ) -> anyhow::Result<Vec<i64>> {
-    let mut seqs = Vec::with_capacity(records.len());
-    for payload in records {
-        seqs.push(record_insert(&mut *db, board_id, table, payload, writer, upsert, principal)?);
+    db.begin(board_id)?;
+    let result = (|| -> anyhow::Result<Vec<i64>> {
+        let mut seqs = Vec::with_capacity(records.len());
+        for payload in records {
+            seqs.push(record_insert(&mut *db, board_id, table, payload, writer, upsert, principal)?);
+        }
+        Ok(seqs)
+    })();
+    match result {
+        Ok(seqs) => {
+            db.commit(board_id)?;
+            Ok(seqs)
+        }
+        Err(e) => {
+            let _ = db.rollback(board_id);
+            Err(e)
+        }
     }
-    Ok(seqs)
 }
 
 pub fn record_get(db: &dyn Database, board_id: &str, table: &str, seq: i64) -> anyhow::Result<Option<Record>> {

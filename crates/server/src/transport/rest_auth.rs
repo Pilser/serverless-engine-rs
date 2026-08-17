@@ -21,12 +21,22 @@ pub fn signup(
     };
     let email = req.get("email").and_then(|e| e.as_str()).unwrap_or("").to_string();
     let password = req.get("password").and_then(|p| p.as_str()).unwrap_or("").to_string();
+    let password_hash = req
+        .get("password_hash")
+        .and_then(|p| p.as_str())
+        .filter(|h| !h.is_empty());
     let role = req.get("role").and_then(|r| r.as_str()).unwrap_or("reader").to_string();
+    if !password.is_empty() == password_hash.is_some() {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "provide exactly one of password or password_hash",
+        );
+    }
     match server
         .engine
         .lock()
         .unwrap()
-        .signup_user(board, &email, &password, &role, principal)
+        .signup_user(board, &email, &password, password_hash, &role, principal)
     {
         Ok(user) => json_response(StatusCode::CREATED, json!({ "ok": true, "user": user })),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),

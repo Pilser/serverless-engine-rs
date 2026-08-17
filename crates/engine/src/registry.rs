@@ -831,6 +831,86 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "auth".into(),
+        verb: "signup".into(),
+        summary: "Create a user (plaintext password or imported bcrypt hash).".into(),
+        description: "Two modes, chosen per-call: pass `password` (engine bcrypt-hashes it, >= 6 chars) or `password_hash` (an existing bcrypt hash, e.g. from Supabase, stored verbatim — requires an admin/owner caller). Exactly one of the two must be provided.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "email".into(), r#type: ArgType::Str, required: true, help: "The user's email (lowercased).".into() },
+            ArgSpec { name: "password".into(), r#type: ArgType::Str, required: false, help: "Plaintext password (mode B: engine hashes it).".into() },
+        ],
+        flags: vec![
+            FlagSpec { name: "password_hash".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Existing bcrypt hash to import verbatim (mode A; admin/owner only).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "role".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Requested role (clamped to reader for non-admin callers; default reader).".into(), conflicts: vec![], requires: vec![] },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "board_id": "b_abc", "role": "teacher", "created_at": "..." } }),
+        auth: Role::Public,
+        destructive: false,
+        dry_run: false,
+        examples: vec![
+            Example {
+                args: "auth signup b_abc a@x.ug plaintext123 --role teacher".into(),
+                description: "Create a user with a plaintext password.".into(),
+                response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug" } }),
+            },
+            Example {
+                args: "auth signup b_abc ali@sised.sc.ug --password_hash '$2a$10$VjZAU2...' --role teacher".into(),
+                description: "Import a user with an existing Supabase hash.".into(),
+                response: serde_json::json!({ "ok": true, "user": { "email": "ali@sised.sc.ug" } }),
+            },
+        ],
+        see_also: vec!["auth.login".into(), "auth.me".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "auth".into(),
+        verb: "login".into(),
+        summary: "Authenticate and get a session token + JWT.".into(),
+        description: "Verifies the password and returns a revocable opaque token plus a signed JWT (HS256).".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "email".into(), r#type: ArgType::Str, required: true, help: "The user's email.".into() },
+            ArgSpec { name: "password".into(), r#type: ArgType::Str, required: true, help: "The password.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "token": "...", "jwt": "..." }),
+        auth: Role::Public,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "auth login b_abc a@x.ug secret123".into(),
+            description: "Log in and receive a session token + JWT.".into(),
+            response: serde_json::json!({ "ok": true, "token": "...", "jwt": "..." }),
+        }],
+        see_also: vec!["auth.signup".into(), "auth.me".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "auth".into(),
+        verb: "me".into(),
+        summary: "Resolve a session token to the logged-in user.".into(),
+        description: "Returns the user (email, role, board) for a valid session token, or an error if invalid or expired.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "token".into(), r#type: ArgType::Str, required: true, help: "Session token from auth login.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "board_id": "b_abc", "role": "teacher", "created_at": "..." } }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![],
+        see_also: vec!["auth.login".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "list".into(),
         summary: "List automation recipes for a board.".into(),

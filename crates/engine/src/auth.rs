@@ -223,23 +223,44 @@ fn find_user(db: &dyn Database, board_id: &str, email: &str) -> anyhow::Result<O
 
 /// Create a user. `role` is clamped: only an admin/owner caller may set a role
 /// above reader; otherwise the new user is a reader.
+/// Two modes, chosen per-call:
+/// - `password_hash: Some(hash)` — import an existing bcrypt hash verbatim
+///   (migration from e.g. Supabase). Only accepted when the caller is
+///   admin/owner (same gate as the role clamp), and the hash must look like a
+///   bcrypt hash (starts with `$2`).
+/// - `password_hash: None` — the engine bcrypt-hashes `password` (>= 6 chars).
 pub fn user_signup(
     db: &mut dyn Database,
     board_id: &str,
     email: &str,
     password: &str,
+    password_hash: Option<&str>,
     role: &str,
     caller: &Principal,
 ) -> anyhow::Result<User> {
-    if email.is_empty() || password.len() < 6 {
-        anyhow::bail!("email and a password of at least 6 characters are required");
+    if email.is_empty() {
+        anyhow::bail!("email is required");
     }
     let email = email.to_lowercase();
     if find_user(db, board_id, &email)?.is_some() {
         anyhow::bail!("user already exists");
     }
     let granted = if role_rank(&caller.role) >= role_rank("admin") { role } else { "reader" };
-    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)?;
+    let password_hash = match password_hash {
+        Some(hash) => {
+            require_role(caller, role_rank("admin"))?;
+            if !hash.starts_with("$2") {
+                anyhow::bail!("password_hash must be a bcrypt hash (starts with $2)");
+            }
+            hash.to_string()
+        }
+        None => {
+            if password.len() < 6 {
+                anyhow::bail!("a password of at least 6 characters is required");
+            }
+            bcrypt::hash(password, bcrypt::DEFAULT_COST)?
+        }
+    };
     let user = User {
         email: email.clone(),
         board_id: board_id.to_string(),

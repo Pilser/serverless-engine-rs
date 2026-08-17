@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod auth;
 pub mod files;
 pub mod jobs;
 pub mod recipes;
@@ -24,6 +25,9 @@ pub fn run(
         "apps.delete" => apps::delete(engine, principal, arguments),
         "apps.update" => apps::update(engine, principal, arguments),
         "apps.resources" => apps::resources(engine, principal, arguments),
+        "auth.signup" => auth::signup(engine, principal, arguments),
+        "auth.login" => auth::login(engine, principal, arguments),
+        "auth.me" => auth::me(engine, principal, arguments),
         "records.submit" => records::submit(engine, principal, arguments),
         "records.get" => records::get(engine, principal, arguments),
         "records.list" => records::list(engine, principal, arguments),

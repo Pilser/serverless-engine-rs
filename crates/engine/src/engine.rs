@@ -350,10 +350,19 @@ impl ServerlessEngine {
         board_id: &str,
         email: &str,
         password: &str,
+        password_hash: Option<&str>,
         role: &str,
         caller: &Principal,
     ) -> anyhow::Result<crate::auth::User> {
-        crate::auth::user_signup(self.db.as_mut(), board_id, email, password, role, caller)
+        crate::auth::user_signup(
+            self.db.as_mut(),
+            board_id,
+            email,
+            password,
+            password_hash,
+            role,
+            caller,
+        )
     }
 
     pub fn login_user(

@@ -8,6 +8,7 @@ pub struct Config {
     pub port: u16,
     pub data_dir: PathBuf,
     pub backend: String,
+    pub helix_url: String,
     pub http_timeout_ms: u64,
 }
 
@@ -17,7 +18,8 @@ impl Default for Config {
             host: "127.0.0.1".to_string(),
             port: 7070,
             data_dir: PathBuf::from("data"),
-            backend: "turso".to_string(),
+            backend: "helix".to_string(),
+            helix_url: "http://127.0.0.1:7979".to_string(),
             http_timeout_ms: 15_000,
         }
     }
@@ -36,7 +38,8 @@ impl Config {
                 .parse()
                 .unwrap_or(7070),
             data_dir: PathBuf::from(get(&dotenv, "SRV_DATA_DIR", "data")),
-            backend: get(&dotenv, "SRV_DB", "turso"),
+            backend: get(&dotenv, "SRV_DB", "helix"),
+            helix_url: get(&dotenv, "SRV_HELIX_URL", "http://127.0.0.1:7979"),
             http_timeout_ms: get(&dotenv, "SRV_HTTP_TIMEOUT_MS", "15000")
                 .parse()
                 .unwrap_or(15_000),

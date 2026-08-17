@@ -19,15 +19,17 @@ fn groups(specs: &[CommandSpec]) -> Vec<String> {
 pub fn about() -> String {
     "serverlessEngine-rs — a standalone, embeddable serverless platform.\n\
      \n\
-     Boards are apps; records are JSON documents in a board; recipes are event-driven\n\
+     Boards are apps; each board is one HelixDB tenant. Records are JSON documents\n\
+     stored as graph nodes in the board's tenant; recipes are event-driven\n\
      automation; keys authorize read/write/admin access.\n\
      \n\
      First steps:\n\
-       srv apps create --title 'my app'      create a board\n\
-       srv records submit b_<id> '{\"name\":\"x\"}'   insert a record\n\
-       srv records query b_<id> --filter '...'     query records\n\
-       srv --help                              see every command\n\
-       srv help <group> <verb>                 full spec of one verb\n"
+       srv apps create 'my app'             create a board (returns b_<id>)\n\
+       srv records submit b_<id> <table> '{\"name\":\"x\"}'   insert a record\n\
+       srv records query b_<id> <table> --filter '...'      query records\n\
+       srv records search b_<id> <table> 'laptop'           full-text search\n\
+       srv --help                           see every command\n\
+       srv help <group> <verb>              full spec of one verb\n"
         .to_string()
 }
 

@@ -58,7 +58,12 @@ serverlessEngine is an embeddable, schema-flexible document/database platform. I
 - Encrypted at-rest secrets, audit trail, TTL, cross-board links, file uploads
 - A full MCP tool (`srv …`) that mirrors the entire surface as a CLI-like grammar
 
-The storage engine is **Turso/libSQL** (`turso` crate, vendored at `../turso/bindings/rust`), a Rust re-implementation of SQLite that is **libSQL/SQLite-compatible but not SQLite** — it brings MVCC with true multi-connection concurrent writers (`BEGIN CONCURRENT` + MVCC journal), a Tantivy-backed FTS index method, built-in vector functions, JSONB, and embedded-replica sync with remote Turso/libSQL servers.
+The storage engine is backed by **HelixDB** (`helix` backend, default): a graph +
+vector + full-text engine reached over raw `POST /v2/query` JSON through the
+`crates/helixdb` client. One Helix tenant per board; engine metadata lives in the
+reserved `__srv__` label namespace; BM25 full-text search runs on a lazily-created
+text index over each table's `_search` property. The `Database` trait keeps the
+engine adapter-agnostic (an in-memory adapter remains for tests/embedding).
 
 ---
 
@@ -83,10 +88,10 @@ The storage engine is **Turso/libSQL** (`turso` crate, vendored at `../turso/bin
 │  session_store.rs migrations.rs                                  │
 │                    │                                             │
 │                    ▼                                             │
-│               turso (libSQL)                                     │
-│               - system DB (accounts, keys, index, jobs, hooks)   │
-│               - session DBs  (one file per session: boards,      │
-│                                records, recipes, secrets, …)     │
+│               helix (HelixDB via POST /v2/query)                 │
+│               - one tenant per board                             │
+│               - __srv__ labels for engine metadata               │
+│               - records = nodes, BM25 on _search                 │
 └──────────────────────────────────────────────────────────────────┘
           │                    │                     │
           ▼                    ▼                     ▼

@@ -57,3 +57,5 @@ token*
 __pycache__/
 **/__pycache__/
 *.pyc
+.helix/
+.env

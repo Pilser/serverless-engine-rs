@@ -99,6 +99,28 @@ pub fn query(
                 .collect()
         })
         .unwrap_or_default();
+
+    // Guardrail: an unfiltered query over a large table would dump a huge
+    // payload into the agent's context. Block it and point at the right tool.
+    let unfiltered = filter.conds.is_empty()
+        && !arguments.get("order").and_then(|o| o.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
+    if unfiltered && !arguments.get("allow_unfiltered").and_then(|a| a.as_bool()).unwrap_or(false) {
+        let count = engine
+            .aggregate_records(&board, &table, &engine::storage::ir::SrvFilter::new(), engine::storage::ir::Agg::Count, None, None)
+            .ok()
+            .and_then(|rows| rows.first().and_then(|r| r.get("value").and_then(|v| v.as_f64())))
+            .unwrap_or(0.0) as i64;
+        if count > 1000 {
+            return Err(format!(
+                "records.query without a filter would return ~{count} rows (table '{table}' on board '{board}'). \
+                 Use a --filter to narrow the scan, or use one of the specialised tools instead:\n\
+                 \x20 • records.aggregate — count/sum/avg/min/max without pulling rows\n\
+                 \x20 • records.list — bounded page of the latest records\n\
+                 \x20 • records.search — BM25 full-text over the payload\n\
+                 If you really need the raw rows, pass --allow_unfiltered true (not recommended for large tables)."
+            ));
+        }
+    }
     let records = engine
         .query_records(&board, &table, &filter, &orders, limit, offset)
         .map_err(|e| e.to_string())?;
@@ -127,6 +149,28 @@ pub fn search(
         .map(|r| json!({ "seq": r.seq, "payload": r.payload }))
         .collect();
     ok(json!({ "records": out }))
+}
+
+pub fn aggregate(
+    engine: &ServerlessEngine,
+    _principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
+    let agg_str = arg_str(arguments, "agg")?;
+    let agg = engine::storage::ir::Agg::parse(agg_str).map_err(|e| e.to_string())?;
+    let field = arguments.get("field").and_then(|v| v.as_str()).map(String::from);
+    let group_by = arguments.get("group_by").and_then(|v| v.as_str()).map(String::from);
+    let filter_json = arguments.get("filter").cloned().unwrap_or(Json::Null);
+    let filter = match filter_json {
+        Json::Null => engine::storage::ir::SrvFilter::new(),
+        other => engine::storage::ir::parse_filter(&other).map_err(|e| e.to_string())?,
+    };
+    let rows = engine
+        .aggregate_records(&board, &table, &filter, agg, field.as_deref(), group_by.as_deref())
+        .map_err(|e| e.to_string())?;
+    ok(json!({ "agg": agg_str, "results": rows }))
 }
 
 pub fn delete(

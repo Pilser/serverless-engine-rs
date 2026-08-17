@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 engine = { path = "../engine" }
+helixdb = { path = "../helixdb" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -20,12 +21,10 @@ tracing = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "http2", "rustls-tls", "rustls-tls-webpki-roots"] }
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", features = ["sink"] }
-turso = { path = "../../../turso/bindings/rust", optional = true }
 
 [features]
 default = ["transport-http"]
 transport-http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "dep:http-body", "dep:http"]
-turso = ["dep:turso"]
 postgres = []
 s3 = []
 redis = []

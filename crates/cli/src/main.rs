@@ -98,10 +98,14 @@ fn cmd_daemon(args: &[String]) -> anyhow::Result<String> {
             let data_dir = args_flag(&args[1..], "--db")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| cfg.data_dir.clone());
-            let backend = if cfg.backend == "memory" { "memory" } else { "turso" };
+            let backend = if cfg.backend == "memory" {
+                "memory"
+            } else {
+                "helix"
+            };
             let database: Box<dyn engine::storage::database::Database> =
                 Box::new(engine::storage::cache::CachedDatabase::new(backend_impl(
-                    backend, &data_dir,
+                    backend, &data_dir, &cfg,
                 )));
             let object_store: Box<dyn engine::storage::object_store::ObjectStore> =
                 Box::new(engine::storage::cache::CachedObjectStore::new(Box::new(
@@ -135,18 +139,27 @@ fn cmd_daemon(args: &[String]) -> anyhow::Result<String> {
             "usage: srv daemon start [--db <dir>]\n\
              note: daemon hosts the engine + MCP over HTTP; other surfaces connect to it.\n\
              --db <dir>   data directory (default ./data; or $SRV_DATA_DIR / .env)\n\
-             env: SRV_HOST SRV_PORT SRV_DATA_DIR SRV_DB SRV_HTTP_TIMEOUT_MS (see .env.example)\n\
+             env: SRV_HOST SRV_PORT SRV_DATA_DIR SRV_DB SRV_HELIX_URL SRV_HTTP_TIMEOUT_MS (see .env.example)\n\
              got: '{:?}'\n",
             other
         )),
     }
 }
 
-fn backend_impl(backend: &str, data_dir: &std::path::Path) -> Box<dyn engine::storage::database::Database> {
-    if backend == "memory" {
-        Box::new(engine::storage::memory::InMemoryDatabase::new())
-    } else {
-        Box::new(server::db::turso::TursoDatabase::new(data_dir.to_path_buf()))
+fn backend_impl(
+    backend: &str,
+    _data_dir: &std::path::Path,
+    cfg: &server::config::Config,
+) -> Box<dyn engine::storage::database::Database> {
+    match backend {
+        "memory" => Box::new(engine::storage::memory::InMemoryDatabase::new()),
+        _ => match server::db::helix::HelixDatabase::new(&cfg.helix_url) {
+            Ok(db) => Box::new(db),
+            Err(e) => {
+                eprintln!("helix backend init failed: {e}");
+                std::process::exit(1);
+            }
+        },
     }
 }
 

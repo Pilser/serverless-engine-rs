@@ -342,18 +342,18 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "submit".into(),
         summary: "Insert a record into a board.".into(),
-        description: "Inserts a JSON document as a new record; returns its seq.".into(),
+        description: "Inserts a JSON document as a new record in the board's tenant; the record is stored as a HelixDB graph node under the table label, with numeric payload fields mirrored as node properties for aggregate pushdown. Returns its seq.".into(),
         positional: vec![ArgSpec {
             name: "board".into(),
             r#type: ArgType::Board,
             required: true,
-            help: "The board id.".into(),
+            help: "The board id (also the HelixDB tenantId).".into(),
         },
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
                 required: true,
-                help: "The table name.".into(),
+                help: "The table (node label) inside the board.".into(),
             },
         ],
         flags: vec![],
@@ -366,7 +366,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records submit b_abc '{\"name\":\"x\"}'".into(),
+            args: "records submit b_abc learners '{\"name\":\"x\",\"grade\":90}'".into(),
             description: "Insert a record.".into(),
             response: serde_json::json!({ "ok": true, "seq": 42 }),
         }],
@@ -378,7 +378,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "query".into(),
         summary: "Filter records by conditions.".into(),
-        description: "Returns records matching a filter, sorted and paged.".into(),
+        description: "Traverses the board tenant's record nodes (table label) and returns those matching a filter, sorted and paged. Filter conditions on routing props (board_id/table/seq) and mirrored numeric fields (p_*) push down to HelixDB predicates; payload-path conditions are applied by the engine after a tenant-scoped node fetch.".into(),
         positional: vec![ArgSpec {
             name: "board".into(),
             r#type: ArgType::Board,
@@ -413,6 +413,16 @@ pub fn registry() -> Vec<CommandSpec> {
                 conflicts: vec![],
                 requires: vec![],
             },
+            FlagSpec {
+                name: "allow_unfiltered".into(),
+                r#type: FlagType::Bool,
+                default: Some("false".into()),
+                allowed: vec![],
+                repeatable: false,
+                help: "Skip the unfiltered-scan guardrail (warns when a filter-less query would return >1000 rows).".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
         ],
         body_json: None,
         response: serde_json::json!({ "ok": true, "records": [{ "seq": 1, "payload": {} }] }),
@@ -424,8 +434,8 @@ pub fn registry() -> Vec<CommandSpec> {
             description: "Query records.".into(),
             response: serde_json::json!({ "ok": true, "records": [] }),
         }],
-        see_also: vec!["records.search".into(), "records.get".into()],
-        danger_notes: None,
+        see_also: vec!["records.search".into(), "records.get".into(), "records.aggregate".into()],
+        danger_notes: Some("An unfiltered query over a large table is blocked (guardrail): use --filter, records.aggregate, records.list, or records.search instead.".into()),
     });
 
     specs.push(CommandSpec {
@@ -565,6 +575,77 @@ pub fn registry() -> Vec<CommandSpec> {
         }],
         see_also: vec!["records.query".into()],
         danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "records".into(),
+        verb: "aggregate".into(),
+        summary: "Aggregate records (count/sum/avg/min/max), optionally grouped.".into(),
+        description: "Runs an aggregate over a table's records: count/sum/avg/min/max on a payload field, optionally grouped by another field. The engine pushes the aggregate down to HelixDB when the target fields are mirrored node properties (top-level numeric payload fields); otherwise it computes in Rust over a tenant-scoped fetch. Use this instead of records.query when you only need summary math, not the rows themselves.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id.".into(),
+            },
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+            ArgSpec {
+                name: "agg".into(),
+                r#type: ArgType::Str,
+                required: true,
+                help: "Aggregate: count | sum | avg | min | max.".into(),
+            },
+        ],
+        flags: vec![
+            FlagSpec {
+                name: "field".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Payload field to aggregate (required except for count), e.g. price.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "group_by".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Payload field to group results by, e.g. category.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "filter".into(),
+                r#type: FlagType::Json,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Filter JSON (see help json filter) applied before aggregating.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "agg": "sum", "results": [{ "value": 42 }] }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "records aggregate b_abc orders sum --field price --group_by category --filter '{\"status\":\"paid\"}'".into(),
+            description: "Sum order prices grouped by category, paid only.".into(),
+            response: serde_json::json!({ "ok": true, "agg": "sum", "results": [{ "group": "books", "value": 99 }] }),
+        }],
+        see_also: vec!["records.query".into(), "records.list".into()],
+        danger_notes: Some("Aggregates scan the matching rows; prefer an explicit --filter to keep the scan small.".into()),
     });
 
     specs.push(CommandSpec {

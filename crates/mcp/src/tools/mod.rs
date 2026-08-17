@@ -37,6 +37,7 @@ pub fn run(
         "records.list" => records::list(engine, principal, arguments),
         "records.query" => records::query(engine, principal, arguments),
         "records.search" => records::search(engine, principal, arguments),
+        "records.aggregate" => records::aggregate(engine, principal, arguments),
         "records.delete" => records::delete(engine, principal, arguments),
         "records.import" => records::import_records(engine, principal, arguments),
         "tables.create" => tables::create(engine, principal, arguments),

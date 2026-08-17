@@ -1,0 +1,3 @@
+[submodule "tools/helixdb-skills"]
+	path = tools/helixdb-skills
+	url = https://github.com/HelixDB/skills

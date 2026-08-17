@@ -393,8 +393,9 @@ pub fn record_insert(
             record_set(&mut *db, board_id, table, existing, prepared, writer)?;
             return Ok(existing);
         }
+    } else {
+        crate::schema::check_unique(db, &cfg, &prepared, None)?;
     }
-    crate::schema::check_unique(db, &cfg, &prepared, None)?;
     let seq = next_seq(db, board_id, table)?;
     let stored = stored_record_json(board_id, table, seq, &prepared, &now_str(), writer);
     db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored))?;

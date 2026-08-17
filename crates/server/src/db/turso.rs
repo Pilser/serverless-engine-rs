@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS wb_records (
     PRIMARY KEY (table_name, seq)
 );
 DROP INDEX IF EXISTS idx_wb_records_fts;
+DROP INDEX IF EXISTS idx_wb_records_payload_id;
 CREATE INDEX IF NOT EXISTS idx_wb_records_board_table ON wb_records(board_id, table_name, seq);
+CREATE INDEX IF NOT EXISTS idx_wb_records_payload_id ON wb_records(CAST(json_extract(payload, '$.id') AS TEXT));
 ";
 
 fn is_system(table: &str) -> bool {

@@ -20,6 +20,14 @@
 !docs/
 !docs/**
 
+# Allow project tools (migration toolkit + HelixDB reference submodule)
+!tools/
+!tools/**
+!tools/helixdb-skills/
+!tools/helixdb-skills/**
+!tools/migrate_iico/
+!tools/migrate_iico/**
+
 # --- Still ignore build artifacts, runtime data and secrets (inside allowed dirs) ---
 target/
 **/target/
@@ -44,3 +52,8 @@ token*
 **/*.log
 .DS_Store
 **/.DS_Store
+
+# Python bytecode
+__pycache__/
+**/__pycache__/
+*.pyc

@@ -191,19 +191,31 @@ fn records_where(
         }
         let path_ph = params.len() + 1;
         params.push(Value::from(normalize_path(&c.field)));
-        let cast_text = format!("CAST(json_extract(payload, ?{path_ph}) AS TEXT)");
-        let cast_num = format!("CAST(json_extract(payload, ?{path_ph}) AS REAL)");
+        let raw_extract = format!("json_extract(payload, ?{path_ph})");
+        let cast_text = format!("CAST({raw_extract} AS TEXT)");
+        let cast_num = format!("CAST({raw_extract} AS REAL)");
         let target = if c.value.is_number() { cast_num.clone() } else { cast_text.clone() };
         let vp = params.len() + 1;
+        let bool_int = c.value.as_bool().map(|b| if b { 1i64 } else { 0i64 });
         let frag = match c.op {
             Op::Search => unreachable!(),
             Op::Eq => {
-                params.push(Value::from(scalar_text(&c.value)));
-                format!("{cast_text} = ?{vp}")
+                if let Some(bi) = bool_int {
+                    params.push(Value::Integer(bi));
+                    format!("{raw_extract} = ?{vp}")
+                } else {
+                    params.push(Value::from(scalar_text(&c.value)));
+                    format!("{cast_text} = ?{vp}")
+                }
             }
             Op::Ne => {
-                params.push(Value::from(scalar_text(&c.value)));
-                format!("{cast_text} <> ?{vp}")
+                if let Some(bi) = bool_int {
+                    params.push(Value::Integer(bi));
+                    format!("({raw_extract} IS NULL OR {raw_extract} <> ?{vp})")
+                } else {
+                    params.push(Value::from(scalar_text(&c.value)));
+                    format!("{cast_text} <> ?{vp}")
+                }
             }
             Op::Gt => {
                 params.push(Value::from(scalar_text(&c.value)));

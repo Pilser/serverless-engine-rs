@@ -203,6 +203,22 @@ pub async fn handle(
     {
         let board = segs[1];
         let rel = if segs.len() > 2 { segs[2..].join("/") } else { String::new() };
+        // SPA hosting: relative asset paths (base "./") in index.html only
+        // resolve correctly when the page URL ends in "/". A bare board root
+        // like /srv/{board} would resolve ./assets/... against /srv/ (dropping
+        // the board id), so redirect to the trailing-slash form.
+        if rel.is_empty() && !path.ends_with('/') {
+            return Ok(with_cors(
+                Response::builder()
+                    .status(StatusCode::PERMANENT_REDIRECT)
+                    .header("location", format!("{}/", &path))
+                    .body(BoxBody::new(
+                        Full::new(Bytes::new())
+                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "redirect")),
+                    ))
+                    .unwrap(),
+            ));
+        }
         let principal = principal_of(&server, board, &headers, None);
         if let Some(resp) = static_site(&server, board, &rel, &principal) {
             return Ok(resp);
@@ -250,9 +266,17 @@ fn static_site(
     if fetched.is_none() && !has_file_ext(&target) {
         fetched = engine.get_asset(board, "index.html").ok().flatten();
     }
-    let Some((data, content_type)) = fetched else {
+    let Some((mut data, content_type)) = fetched else {
         return Some(err_json(StatusCode::NOT_FOUND, "not found"));
     };
+    // Deep-link refreshes (e.g. /srv/<board>/director/letters) serve the root
+    // index.html, but its relative "./assets/..." paths would then resolve
+    // against the deep-link directory and 404. Anchor relative URLs to the
+    // board root so every asset loads regardless of route depth.
+    if content_type.starts_with("text/html") {
+        let base = format!("<base href=\"/srv/{board}/\">");
+        data = inject_base_tag(&data, &base).into_bytes();
+    }
     let body = Full::new(Bytes::from(data))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
     Some(
@@ -265,6 +289,17 @@ fn static_site(
                 .unwrap(),
         ),
     )
+}
+
+fn inject_base_tag(html: &[u8], base_tag: &str) -> String {
+    let src = String::from_utf8_lossy(html);
+    if let Some(hi) = src.to_ascii_lowercase().find("<head") {
+        if let Some(end) = src[hi..].find('>') {
+            let pos = hi + end + 1;
+            return format!("{}{}{}", &src[..pos], base_tag, &src[pos..]);
+        }
+    }
+    format!("<head>{}</head>{}", base_tag, src)
 }
 
 fn cors_response() -> Response<BoxBodyResp> {

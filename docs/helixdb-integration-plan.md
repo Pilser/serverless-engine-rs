@@ -61,6 +61,8 @@ crates/helixdb/
   src/lib.rs        # re-exports, error type, client
   src/client.rs     # POST /v2/query HTTP transport + envelope
   src/request.rs    # JSON envelope builder (read/write batches)
+  src/tenant.rs     # board_id -> Helix tenantId; tenant scoping on every request
+  src/namespaces.rs # __srv__ reserved prefix; engine wb_* <-> reserved label mapping
   src/predicate.rs  # FilterCond -> Helix predicate
   src/row.rs        # engine Row <-> Helix node/edge mapping
 ```
@@ -85,6 +87,57 @@ by config. The wiring point is **`crates/cli/src/main.rs`**:
 
 New adapter file: **`crates/server/src/db/helix.rs`** (registered in `db/mod.rs`),
 implementing `engine::storage::database::Database` by delegating to `crates/helixdb`.
+
+### Multi-tenant model (critical — read first)
+
+This is a **multi-tenant engine**. A **board == one tenant == one app**. When a board
+is created it becomes a tenant; the board is where the app builds its **schema**,
+**recipes**, **keys**, **secrets**, **jobs**, **webhooks**, and issues its **API queries**.
+
+**Today there are two storage layers:**
+
+| Layer | Where | Contents |
+|---|---|---|
+| **System / global** | `system.db` | board registry (`srv_board_index`, `wb_apps`) — which boards exist + owner keys. Shared. |
+| **Per-board** | `boards/{board_id}.db` (one file per tenant) | app data rows (`wb_records`) **and** per-board metadata: `wb_tables` (schema), `wb_recipes`, `wb_keys`, `wb_app_secrets`, `wb_jobs`, `wb_hooks`, `wb_users` |
+
+**Schema / recipes / keys are scoped per board:**
+- Tables: `wb_tables`, keyed `scoped_key(board_id, table)` = `"{board_id}/{table}"`
+- Recipes: `wb_recipes`, filtered by `board_cond(board_id)` + recipe name
+- Keys / secrets / jobs / hooks / users: same `board_id` scoping
+
+**API queries are NOT stored.** They are built at request time from the engine's query IR
+(`SrvFilter`/`FilterCond`) driven by REST (`/api/srv/{board}/tables/{t}/query?filter=...`)
+and MCP tools (`records_query`, `records_list`, `records_search`). Only **schema**
+(`wb_tables`) and **recipes** (`wb_recipes`) are persisted — both per board.
+
+#### HelixDB tenant mapping
+
+**Board id → Helix tenant partition.** Every board gets its own Helix tenant scoping so
+no two tenants' data, schema, or recipes mix:
+
+- All engine reads/writes for a board carry the board's Helix `tenantId`.
+- The engine's `board_cond(board_id)` and `scoped_key(board_id, ...)` map to the Helix
+  tenant scope + label.
+
+#### Reserved metadata namespace (collision safety)
+
+Engine metadata tables live in the same storage as app data (just different table names):
+`wb_apps, wb_records, wb_tables, wb_keys, wb_recipes, wb_recipe_runs, wb_app_secrets,
+wb_hooks, wb_hook_deliveries, wb_links, wb_audit, wb_jobs, wb_job_runs, wb_users,
+wb_sessions`.
+
+**In Helix these must be isolated from user-created labels so they never collide.** A user
+could create a table named `recipes` or `users`; that must not collide with engine
+recipes/users. Rules:
+
+- Engine metadata → a **reserved label namespace**, e.g. prefix with `__srv__`
+  (`__srv__table`, `__srv__recipe`, `__srv__key`, `__srv__user`, `__srv__audit`, ...).
+- User tables → their raw label (`recipes`, `users`, `learners`, ...) in the **user**
+  namespace.
+- The `crates/helixdb` crate owns the `__srv__` prefix constant + a sanitizer that maps
+  engine `wb_*` table names to reserved labels and rejects/rewrites any user attempt to
+  use the reserved prefix.
 
 ### Data model mapping (relational -> graph)
 
@@ -115,10 +168,11 @@ The engine's existing `SrvFilter` (`FilterCond`/`Op`) maps directly to Helix pre
 ## 5. Implementation order (for the implementing agent)
 
 1. Add `crates/helixdb` + workspace entry; implement the `POST /v2/query` client + envelope builder.
-2. Smoke-test against a local Helix (in-memory container) with a tiny read + write.
-3. Add `server/db/helix.rs` implementing `Database` (insert/get/query/delete/upsert) over `crates/helixdb`.
-4. Wire `SRV_DB=helix` in `crates/cli/src/main.rs` (`backend_impl` + backend match).
-5. Verify with the existing engine tests (the engine's behavioral contract) against the Helix backend.
+2. Implement `tenant.rs` (board→Helix tenantId scoping) and `namespaces.rs` (`__srv__` reserved prefix, `wb_*`→reserved-label mapping, user-label sanitizer). **Do this before the data mapping** — it is the isolation contract.
+3. Smoke-test against a local Helix (in-memory container) with a tiny read + write.
+4. Add `server/db/helix.rs` implementing `Database` (insert/get/query/delete/upsert) over `crates/helixdb`, threading `board_id`→tenant and metadata→`__srv__` labels throughout.
+5. Wire `SRV_DB=helix` in `crates/cli/src/main.rs` (`backend_impl` + backend match).
+6. Verify with the existing engine tests (the engine's behavioral contract) against the Helix backend — including multi-board isolation (two boards must not see each other's data, schema, or recipes).
 
 ---
 

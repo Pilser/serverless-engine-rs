@@ -44,7 +44,12 @@ pub fn tables_create(
         Ok(v) => v,
         Err(_) => return err_json(StatusCode::BAD_REQUEST, "invalid json"),
     };
-    let table = req.get("name").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let table = req
+        .get("name")
+        .or_else(|| req.get("table"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
     let schema = req.get("schema").cloned();
     let unique_key = req.get("unique_key").and_then(|u| u.as_str());
     match server.engine.lock().unwrap().create_table(board, &table, schema, unique_key) {

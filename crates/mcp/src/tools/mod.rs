@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod auth;
 pub mod files;
+pub mod graph;
 pub mod jobs;
 pub mod keys;
 pub mod recipes;
@@ -52,6 +53,12 @@ pub fn run(
         "files.put" => files::put(engine, principal, arguments),
         "files.get" => files::get(engine, principal, arguments),
         "files.delete" => files::delete(engine, principal, arguments),
+        "graph.link" => graph::link(engine, principal, arguments),
+        "graph.unlink" => graph::unlink(engine, principal, arguments),
+        "graph.delete" => graph::delete(engine, principal, arguments),
+        "graph.traverse" => graph::traverse(engine, principal, arguments),
+        "graph.sync" => graph::sync(engine, principal, arguments),
+        "graph.search_edges" => graph::search_edges(engine, principal, arguments),
         "jobs.add" => jobs::add(engine, principal, arguments),
         "jobs.list" => jobs::list(engine, principal, arguments),
         "jobs.remove" => jobs::remove(engine, principal, arguments),

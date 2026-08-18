@@ -114,6 +114,59 @@ pub trait Database: Send + Sync + 'static {
 
     fn upsert(&mut self, table: &str, key: &str, row: Row) -> anyhow::Result<i64>;
 
+    // ---- graph (HelixDB) -------------------------------------------------
+    // Optional graph operations over nodes/edges, scoped to a board tenant.
+    // Default implementations report "unsupported" so non-graph adapters
+    // (memory) degrade gracefully; the HelixDB adapter overrides them.
+
+    /// Link two nodes by an edge label with optional edge properties.
+    fn link(
+        &mut self,
+        _board: &str,
+        _from: i64,
+        _label: &str,
+        _to: i64,
+        _props: &Json,
+    ) -> anyhow::Result<i64> {
+        anyhow::bail!("graph links are not supported by the {} backend", self.adapter())
+    }
+
+    /// Traverse from a node along an edge label (out/in/both), optionally
+    /// multi-hop. Returns reached node ids with their data.
+    fn traverse(
+        &self,
+        _board: &str,
+        _from: i64,
+        _label: Option<&str>,
+        _dir: &str,
+        _depth: usize,
+    ) -> anyhow::Result<Cursor> {
+        anyhow::bail!("graph traversal is not supported by the {} backend", self.adapter())
+    }
+
+    /// Search edges by BM25 over an edge property within the board tenant.
+    fn search_edges(
+        &self,
+        _board: &str,
+        _label: &str,
+        _property: &str,
+        _query: &str,
+        _limit: usize,
+    ) -> anyhow::Result<Cursor> {
+        anyhow::bail!("edge search is not supported by the {} backend", self.adapter())
+    }
+
+    /// Drop an edge by its Helix edge id (`$id`).
+    fn unlink(&mut self, _board: &str, _edge_id: i64) -> anyhow::Result<bool> {
+        anyhow::bail!("graph unlink is not supported by the {} backend", self.adapter())
+    }
+
+    /// Drop a node and every edge touching it (both directions). Helix does
+    /// NOT cascade edge deletes on node drop, so edges must be removed first.
+    fn delete_node(&mut self, _board: &str, _node_id: i64) -> anyhow::Result<usize> {
+        anyhow::bail!("graph node delete is not supported by the {} backend", self.adapter())
+    }
+
     /// Begin a write transaction scoped to a board's shard. Default is a no-op
     /// (memory backend and non-transactional adapters). Used by bulk loads to
     /// amortize commit/sync cost across many record inserts.

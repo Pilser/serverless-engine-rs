@@ -41,6 +41,154 @@ impl ServerlessEngine {
         self.db.as_ref()
     }
 
+    // ---- graph (HelixDB) ------------------------------------------------
+
+    /// Link two nodes in a board's tenant by an edge label. Node ids are the
+    /// Helix node ids (`$id`) returned by records tools.
+    pub fn graph_link(
+        &mut self,
+        board: &str,
+        from: i64,
+        label: &str,
+        to: i64,
+        props: &Json,
+    ) -> anyhow::Result<i64> {
+        self.db.link(board, from, label, to, props)
+    }
+
+    /// Traverse from a node along an edge label (out/in/both), up to `depth`
+    /// hops. Returns reached nodes (id + data).
+    pub fn graph_traverse(
+        &self,
+        board: &str,
+        from: i64,
+        label: Option<&str>,
+        dir: &str,
+        depth: usize,
+    ) -> anyhow::Result<crate::storage::database::Cursor> {
+        self.db.traverse(board, from, label, dir, depth)
+    }
+
+    /// BM25 search over edges in a board's tenant.
+    pub fn graph_search_edges(
+        &self,
+        board: &str,
+        label: &str,
+        property: &str,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Json>> {
+        let cursor = self.db.search_edges(board, label, property, query, limit)?;
+        Ok(cursor.rows.into_iter().map(|r| r.data).collect())
+    }
+
+    /// Drop an edge by its Helix edge id.
+    pub fn graph_unlink(&mut self, board: &str, edge_id: i64) -> anyhow::Result<bool> {
+        self.db.unlink(board, edge_id)
+    }
+
+    /// Drop a node and every edge touching it (both directions).
+    pub fn graph_delete_node(&mut self, board: &str, node_id: i64) -> anyhow::Result<usize> {
+        self.db.delete_node(board, node_id)
+    }
+
+    /// Materialize `*_id` payload references in a table as real Helix edges.
+    /// For each record, a payload field ending in `_id` (e.g. `class_id`)
+    /// names a target table (`class`/`classes`); its value is the target
+    /// record's seq, resolved to a node id. An edge is created from the
+    /// source record's node to the target node, labeled from the field
+    /// (`class_id` -> `RELATED_CLASS`). Idempotent per (from, label, to).
+    /// Returns a report of created edges.
+    pub fn graph_sync(
+        &mut self,
+        board: &str,
+        table: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let records = self.list_records(board, table, 1000, None, 0)?;
+        let mut created: Vec<serde_json::Value> = Vec::new();
+        let mut skipped = 0usize;
+        for rec in &records {
+            let Some(from) = rec.payload.get("_node_id").and_then(|v| v.as_i64()) else {
+                continue;
+            };
+            let Some(obj) = rec.payload.as_object() else { continue };
+            for (field, value) in obj {
+                let Some(target_table) = field.strip_suffix("_id") else {
+                    continue;
+                };
+                if field == "_node_id" || target_table.is_empty() {
+                    continue;
+                }
+                let Some(seq) = value.as_i64().or_else(|| value.as_str().and_then(|s| s.parse().ok())) else {
+                    continue;
+                };
+                // Resolve the target table: try exact, singular, plural.
+                let candidates = [target_table.to_string(), format!("{target_table}s")];
+                let mut target_node = None;
+                for t in &candidates {
+                    if t == table {
+                        continue; // skip self-table refs (would be self-loops)
+                    }
+                    let q = crate::storage::database::Query {
+                        filter: crate::storage::ir::SrvFilter {
+                            conds: vec![
+                                crate::crud::board_cond(board),
+                                crate::crud::table_cond(t),
+                                crate::storage::ir::FilterCond {
+                                    field: "$.seq".to_string(),
+                                    op: crate::storage::ir::Op::Eq,
+                                    value: serde_json::Value::from(seq),
+                                },
+                            ],
+                        },
+                        orders: vec![],
+                        limit: 1,
+                        offset: 0,
+                        ttl: None,
+                    };
+                    let rows = self.db.query("wb_records", &q)?.rows;
+                    if let Some(row) = rows.first() {
+                        let id = row
+                            .data
+                            .get("payload")
+                            .and_then(|p| p.get("_node_id"))
+                            .or_else(|| row.data.get("_node_id"))
+                            .and_then(|v| v.as_i64());
+                        if let Some(id) = id {
+                            target_node = Some(id);
+                            break;
+                        }
+                    }
+                }
+                let Some(to) = target_node else {
+                    skipped += 1;
+                    continue;
+                };
+                let label = format!("RELATED_{}", target_table.to_uppercase());
+                // Idempotency: skip if an edge already exists from->to with this label.
+                let existing = self.db.traverse(board, from, Some(&label), "out", 1)?.rows;
+                if existing.iter().any(|r| match &r.key {
+                    crate::model::Key::Int(v) => *v == to,
+                    crate::model::Key::Text(s) => s.parse::<i64>().map(|v| v == to).unwrap_or(false),
+                }) {
+                    skipped += 1;
+                    continue;
+                }
+                let edge = self.db.link(board, from, &label, to, &serde_json::json!({}))?;
+                created.push(serde_json::json!({
+                    "from": from, "label": label, "to": to, "edge": edge,
+                    "field": field, "target_table": target_table,
+                }));
+            }
+        }
+        Ok(serde_json::json!({
+            "table": table,
+            "created": created.len(),
+            "skipped": skipped,
+            "edges": created,
+        }))
+    }
+
     pub fn object_store(&self) -> &dyn ObjectStore {
         self.store.as_ref()
     }

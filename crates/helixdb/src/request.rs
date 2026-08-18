@@ -108,6 +108,70 @@ pub fn drop(input: Json) -> Json {
     json!({ "drop": { "input": input } })
 }
 
+/// `add_e` — create an edge from the current node(s) to `to` with a label and
+/// properties. The tenant property is always included on the edge.
+pub fn add_e(input: Json, label: &str, to: &str, tenant: &str, properties: &[(String, Json)]) -> Json {
+    let mut props: Vec<Json> = properties
+        .iter()
+        .map(|(k, v)| json!([k, prop_input(v)]))
+        .collect();
+    props.push(json!([TENANT_PROP, prop_input(&json!(tenant))]));
+    json!({
+        "add_e": { "input": input, "label": label, "to": { "var": to }, "properties": props }
+    })
+}
+
+/// Traverse `out`/`in`/`both` from the current nodes by edge label.
+pub fn traverse(input: Json, dir: &str, label: Option<&str>) -> Json {
+    let mut obj = serde_json::Map::new();
+    obj.insert("input".into(), input);
+    if let Some(l) = label {
+        obj.insert("label".into(), json!(l));
+    }
+    json!({ dir: obj })
+}
+
+/// Edge source by label + tenant scope (`edges_where`).
+pub fn edges_where(label: &str, tenant: &str) -> Json {
+    json!({
+        "edges_where": {
+            "predicate": Predicate::new()
+                .eq("$label", json!(label))
+                .eq(TENANT_PROP, json!(tenant))
+                .into_json()
+        }
+    })
+}
+
+/// BM25 search over edges: `text_search_edges` with tenant scope.
+pub fn text_search_edges_with(
+    label: &str,
+    property: &str,
+    query: &str,
+    k: usize,
+    tenant: &str,
+) -> Json {
+    json!({
+        "text_search_edges": {
+            "label": label,
+            "property": property,
+            "tenant_value": { "value": { "string": tenant } },
+            "query_text": { "value": { "string": query } },
+            "k": { "literal": k }
+        }
+    })
+}
+
+/// `create_index` for a node or edge text index (idempotent).
+pub fn create_text_index(kind: &str, label: &str, property: &str) -> Json {
+    let spec = if kind == "edge" {
+        json!({ "edge_text": { "label": label, "property": property, "tenant_property": TENANT_PROP } })
+    } else {
+        json!({ "node_text": { "label": label, "property": property, "tenant_property": TENANT_PROP } })
+    };
+    json!({ "create_index": { "spec": spec, "if_not_exists": true } })
+}
+
 /// Node source scoped to a board's tenant AND its `table` property — the
 /// workhorse for `wb_records` rows.
 pub fn record_source(tenant: &str, table: &str) -> Json {

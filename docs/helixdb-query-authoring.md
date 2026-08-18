@@ -228,7 +228,94 @@ each board — A must never see B's rows, schema, recipes, keys, or jobs.
 
 ---
 
-## 6. Authoring checklist
+## 6. The graph dimension (edges + traversal + edge FTS)
+
+Records are nodes; edges make them a graph. All graph operations are scoped to
+the board tenant, and edges carry `tenantId` like nodes.
+
+### 6.1 Tools
+
+| Tool | Purpose |
+|---|---|
+| `srv graph link <board> <from> <label> <to> [--props '{...}']` | Create an edge (returns the edge `$id`) |
+| `srv graph unlink <board> <edge>` | Drop a specific edge by its `$id` |
+| `srv graph delete <board> <node>` | Drop a node AND every edge touching it (both directions — Helix does NOT cascade) |
+| `srv graph sync <board> <table>` | **Wire a table into the graph**: scan its records; every payload field ending in `_id` (e.g. `class_id`) resolves to the target table's record (by seq) and creates an edge `RELATED_<FIELD>` — idempotent |
+| `srv graph traverse <board> <from> [--dir out\|in\|both] [--label E] [--depth N]` | Walk edges; `depth > 1` uses `repeat` |
+| `srv graph search_edges <board> <label> <property> <q>` | BM25 over edge properties (index created lazily) |
+
+**Node ids:** every record's payload carries a non-persisted `_node_id` (the
+Helix `$id`) — `records query`/`list`/`search`/`get` return it so you can link
+and traverse without guessing ids.
+
+**Tables → graph networks:** submit records with `*_id` fields (e.g. a
+`learners` row with `class_id: 1`), then run `srv graph sync <board> learners`
+to materialize `Learner -[:RELATED_CLASS]-> Class` edges automatically. Re-run
+after adding records — it is idempotent. The synced network is then traversable
+in both directions (`out` from learner to class, `in` from class to learners)
+and its edge properties are searchable with `graph search_edges` once the edge
+text index is built.
+
+### 6.2 Envelope shapes
+
+Create an edge (`add_e`):
+
+```json
+{
+  "add_e": {
+    "input": { "nodes": { "reference": { "var": "from" } } },
+    "label": "KNOWS",
+    "to": { "var": "to_node" },
+    "properties": [["since", { "value": { "string": "2024" } }], ["tenantId", { "value": { "string": "b_x" } }]]
+  }
+}
+```
+
+Traverse (`out`/`in`/`both`; `repeat` for multi-hop):
+
+```json
+{
+  "out": { "input": { "nodes": { "reference": { "ids": [1030] } } }, "label": "KNOWS" }
+}
+```
+
+Edge BM25 (`text_search_edges`, tenant-scoped like nodes):
+
+```json
+{
+  "text_search_edges": {
+    "label": "KNOWS",
+    "property": "note",
+    "tenant_value": { "value": { "string": "b_x" } },
+    "query_text": { "value": { "string": "friends" } },
+    "k": { "literal": 20 }
+  }
+}
+```
+
+### 6.3 Edge FTS index (critical)
+
+**HelixDB does NOT index everything by default.** Both node and edge full-text
+search require an explicit text index on the exact (label, property) pair, and
+the build is **async** — `create_index` returns an `operation_id`; the search
+fails with `index_not_found` until the build completes (poll
+`get_index_operation` until `status == "succeeded"`).
+
+- Node FTS: index `node_text` on `__srv__record._search` (auto-created by the
+  engine's adapter on first `records search`; it falls back to a Rust scan
+  until ready).
+- Edge FTS: index `edge_text` on `(label, property)` — e.g.
+  `KNOWS.note` — auto-created on first `graph search_edges`; falls back to a
+  Rust scan until ready.
+
+**So the answer to "does HelixDB index everything?": no.** You must index the
+exact (label, property) you want to FTS. The engine hides this by lazily
+creating the index and degrading to a scan until it's built — but a brand-new
+property/label pair is NOT searchable until the async build lands.
+
+---
+
+## 7. Authoring checklist
 
 When you write a query that runs in an app's board:
 
@@ -249,7 +336,7 @@ When you write a query that runs in an app's board:
 
 ---
 
-## 7. Environment / resources
+## 8. Environment / resources
 
 - Daemon: `srv daemon start` with `SRV_DB=helix` + `SRV_HELIX_URL`
   (default `http://127.0.0.1:7979`).

@@ -183,13 +183,22 @@ fn to_predicate(conds: &[FilterCond], tenant: &str, label: &str) -> (Json, Vec<F
 }
 
 /// Node JSON -> engine Row. `data` holds the engine JSON (stored as a string);
-/// `_srv_key` restores the engine key.
+/// `_srv_key` restores the engine key. The Helix node `$id` is stamped into the
+/// record's payload as `_node_id` (non-persisted) so graph tools
+/// (link/traverse) can address the node.
 fn node_to_row(node: &Json, table: &str) -> anyhow::Result<Row> {
-    let data = match node.get(DATA_PROP) {
+    let mut data = match node.get(DATA_PROP) {
         Some(Json::String(s)) => serde_json::from_str(s).unwrap_or(Json::Null),
         Some(other) => other.clone(),
         None => node.clone(),
     };
+    if let Some(id) = node.get("$id").and_then(|v| v.as_i64()) {
+        if let Some(payload) = data.get_mut("payload").and_then(|p| p.as_object_mut()) {
+            payload.insert("_node_id".to_string(), Json::from(id));
+        } else if let Some(obj) = data.as_object_mut() {
+            obj.insert("_node_id".to_string(), Json::from(id));
+        }
+    }
     let key = match node.get(helixdb::row::KEY_PROP) {
         Some(Json::String(s)) => Key::text(s.clone()),
         Some(Json::Number(n)) => Key::int(n.as_i64().unwrap_or(0)),
@@ -664,6 +673,168 @@ impl Database for HelixDatabase {
         Ok(0)
     }
 
+    fn link(
+        &mut self,
+        board: &str,
+        from: i64,
+        label: &str,
+        to: i64,
+        props: &Json,
+    ) -> anyhow::Result<i64> {
+        let tenant = self.tenant(board);
+        let edge_props: Vec<(String, Json)> = props
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let from_entry = request::entry("from", request::node_by_id(from));
+        let to_entry = request::entry("to_node", request::node_by_id(to));
+        let edge = request::add_e(
+            json!({ "nodes": { "reference": { "var": "from" } } }),
+            label,
+            "to_node",
+            tenant.as_str(),
+            &edge_props,
+        );
+        let edge_entry = request::entry("edge", edge);
+        let batch = request::write_batch(vec![from_entry, to_entry, edge_entry], vec!["edge"]);
+        let resp = self.client.post("write", "link", batch)?;
+        let edge_id = resp
+            .get("edge")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|e| e.get("$id"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        Ok(edge_id)
+    }
+
+    fn traverse(
+        &self,
+        board: &str,
+        from: i64,
+        label: Option<&str>,
+        dir: &str,
+        depth: usize,
+    ) -> anyhow::Result<Cursor> {
+        let _ = board;
+        let src = request::node_by_id(from);
+        let mut hop = serde_json::Map::new();
+        hop.insert("input".into(), json!("context"));
+        if let Some(l) = label {
+            hop.insert("label".into(), json!(l));
+        }
+        let root = if depth > 1 {
+            json!({
+                "value_map": {
+                    "input": {
+                        "repeat": {
+                            "input": src,
+                            "config": {
+                                "traversal": { "root": { dir: hop } },
+                                "times": depth,
+                                "emit": "all",
+                                "max_depth": 100
+                            }
+                        }
+                    },
+                    "properties": ["$id", DATA_PROP, "table"]
+                }
+            })
+        } else {
+            let mut hop2 = serde_json::Map::new();
+            hop2.insert("input".into(), src);
+            if let Some(l) = label {
+                hop2.insert("label".into(), json!(l));
+            }
+            request::value_map(json!({ dir: hop2 }), vec!["$id", DATA_PROP, "table"])
+        };
+        let batch = request::read_batch(vec![request::entry("nodes", root)], vec!["nodes"]);
+        let resp = self.client.post("read", "traverse", batch)?;
+        let mut rows = Vec::new();
+        for node in resp.rows("nodes") {
+            rows.push(node_to_row(&node, "")?);
+        }
+        Ok(Cursor { rows, has_more: false })
+    }
+
+    fn search_edges(
+        &self,
+        board: &str,
+        label: &str,
+        property: &str,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Cursor> {
+        let tenant = self.tenant(board);
+        // Ensure the edge text index exists (idempotent, async build).
+        let spec = json!({
+            "edge_text": { "label": label, "property": property, "tenant_property": helixdb::tenant::TENANT_PROP }
+        });
+        let idx_root = json!({ "create_index": { "spec": spec, "if_not_exists": true } });
+        let _ = self.client.post("write", "ensure_edge_index", request::write_batch(
+            vec![request::entry("idx", idx_root)],
+            vec!["idx"],
+        ))?;
+        let root = request::text_search_edges_with(label, property, query, limit, tenant.as_str());
+        let batch = request::read_batch(vec![request::entry("hits", root)], vec!["hits"]);
+        match self.client.post("read", "search_edges", batch) {
+            Ok(resp) => {
+                let mut rows = Vec::new();
+                for node in resp.rows("hits") {
+                    rows.push(Row::new(Key::int(node.get("$id").and_then(|v| v.as_i64()).unwrap_or(0)), node));
+                }
+                Ok(Cursor { rows, has_more: false })
+            }
+            // Index not built yet (async): fall back to scanning the tenant's
+            // edges of this label and filtering the property in Rust.
+            Err(e) if e.to_string().contains("index_not_found") => {
+                self.scan_edges_fallback(tenant.as_str(), label, property, query, limit)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn unlink(&mut self, _board: &str, edge_id: i64) -> anyhow::Result<bool> {
+        // drop_edge_by_id removes a specific edge (multigraph-safe). Like
+        // `drop`, it returns an empty array even when it drops — treat a
+        // successful request as removed.
+        let root = json!({ "drop_edge_by_id": { "edges": { "ids": [edge_id] } } });
+        let batch = request::write_batch(vec![request::entry("edge", root)], vec!["edge"]);
+        self.client.post("write", "unlink", batch)?;
+        Ok(true)
+    }
+
+    fn delete_node(&mut self, board: &str, node_id: i64) -> anyhow::Result<usize> {
+        let tenant = self.tenant(board);
+        let mut removed = 0usize;
+        // Helix does NOT cascade edge deletes on node drop, so drop every edge
+        // touching the node first (out_e + in_e), then drop the node.
+        for dir in ["out_e", "in_e"] {
+            let src = json!({ "nodes": { "reference": { "ids": [node_id] } } });
+            let hop = json!({ dir: { "input": src } });
+            let root = request::value_map(hop, vec!["$id"]);
+            let batch = request::read_batch(vec![request::entry("edges", root)], vec!["edges"]);
+            let resp = self.client.post("read", "node_edges", batch)?;
+            for edge in resp.rows("edges") {
+                if let Some(id) = edge.get("$id").and_then(|v| v.as_i64()) {
+                    let eroot = json!({ "drop_edge_by_id": { "edges": { "ids": [id] } } });
+                    let ebatch = request::write_batch(vec![request::entry("edge", eroot)], vec!["edge"]);
+                    let _ = self.client.post("write", "drop_edge", ebatch)?;
+                    removed += 1;
+                }
+            }
+        }
+        // Now drop the node itself.
+        let nroot = request::drop(json!({ "nodes": { "reference": { "ids": [node_id] } } }));
+        let nbatch = request::write_batch(vec![request::entry("node", nroot)], vec!["node"]);
+        let _ = self.client.post("write", "delete_node", nbatch)?;
+        removed += 1;
+        let _ = tenant;
+        Ok(removed)
+    }
+
     fn begin(&mut self, _board: &str) -> anyhow::Result<()> {
         Ok(())
     }
@@ -937,6 +1108,34 @@ impl HelixDatabase {
             }
         }
         Ok(Some(out))
+    }
+
+    /// Rust fallback for edge search: fetch all edges of a label in the tenant
+    /// and filter by substring match on the property.
+    fn scan_edges_fallback(
+        &self,
+        tenant: &str,
+        label: &str,
+        property: &str,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Cursor> {
+        let src = request::edges_where(label, tenant);
+        let root = request::value_map(src, vec!["$id", "$label", property]);
+        let batch = request::read_batch(vec![request::entry("edges", root)], vec!["edges"]);
+        let resp = self.client.post("read", "scan_edges", batch)?;
+        let q = query.to_lowercase();
+        let mut rows = Vec::new();
+        for edge in resp.rows("edges") {
+            let val = edge.get(property).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            if val.contains(&q) {
+                rows.push(Row::new(Key::int(edge.get("$id").and_then(|v| v.as_i64()).unwrap_or(0)), edge));
+                if rows.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(Cursor { rows, has_more: false })
     }
 }
 

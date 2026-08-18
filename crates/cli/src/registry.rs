@@ -28,6 +28,8 @@ pub fn about() -> String {
        srv records submit b_<id> <table> '{\"name\":\"x\"}'   insert a record\n\
        srv records query b_<id> <table> --filter '...'      query records\n\
        srv records search b_<id> <table> 'laptop'           full-text search\n\
+       srv graph link b_<id> <from> KNOWS <to>               link nodes into a graph\n\
+       srv graph traverse b_<id> <from> --dir out            walk the graph\n\
        srv --help                           see every command\n\
        srv help <group> <verb>              full spec of one verb\n"
         .to_string()

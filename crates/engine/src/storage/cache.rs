@@ -187,6 +187,47 @@ impl Database for CachedDatabase {
         Ok(seq)
     }
 
+    fn link(
+        &mut self,
+        board: &str,
+        from: i64,
+        label: &str,
+        to: i64,
+        props: &Json,
+    ) -> anyhow::Result<i64> {
+        self.inner.link(board, from, label, to, props)
+    }
+
+    fn traverse(
+        &self,
+        board: &str,
+        from: i64,
+        label: Option<&str>,
+        dir: &str,
+        depth: usize,
+    ) -> anyhow::Result<Cursor> {
+        self.inner.traverse(board, from, label, dir, depth)
+    }
+
+    fn search_edges(
+        &self,
+        board: &str,
+        label: &str,
+        property: &str,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Cursor> {
+        self.inner.search_edges(board, label, property, query, limit)
+    }
+
+    fn unlink(&mut self, board: &str, edge_id: i64) -> anyhow::Result<bool> {
+        self.inner.unlink(board, edge_id)
+    }
+
+    fn delete_node(&mut self, board: &str, node_id: i64) -> anyhow::Result<usize> {
+        self.inner.delete_node(board, node_id)
+    }
+
     fn begin(&mut self, board: &str) -> anyhow::Result<()> {
         self.inner.begin(board)
     }

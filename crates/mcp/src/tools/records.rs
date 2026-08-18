@@ -71,7 +71,7 @@ pub fn list(
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
-        .map(|r| json!({ "seq": r.seq, "payload": r.payload }))
+        .map(|r| json!({ "seq": r.seq, "node_id": r.payload.get("_node_id").cloned().unwrap_or(Json::Null), "payload": r.payload }))
         .collect();
     ok(json!({ "records": out }))
 }
@@ -126,7 +126,7 @@ pub fn query(
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
-        .map(|r| json!({ "seq": r.seq, "payload": r.payload }))
+        .map(|r| json!({ "seq": r.seq, "node_id": r.payload.get("_node_id").cloned().unwrap_or(Json::Null), "payload": r.payload }))
         .collect();
     ok(json!({ "records": out }))
 }
@@ -146,7 +146,7 @@ pub fn search(
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
-        .map(|r| json!({ "seq": r.seq, "payload": r.payload }))
+        .map(|r| json!({ "seq": r.seq, "node_id": r.payload.get("_node_id").cloned().unwrap_or(Json::Null), "payload": r.payload }))
         .collect();
     ok(json!({ "records": out }))
 }

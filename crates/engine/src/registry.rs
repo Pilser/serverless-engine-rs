@@ -1256,6 +1256,283 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "graph".into(),
+        verb: "link".into(),
+        summary: "Create an edge between two nodes in a board's tenant.".into(),
+        description: "Links two nodes (by Helix node id) with an edge label and optional edge properties, scoped to the board tenant. Edge FTS on a property becomes searchable after the first graph.search_edges call triggers the edge text index build (async).".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id (also the HelixDB tenantId).".into(),
+            },
+            ArgSpec {
+                name: "from".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "Source node id ($id).".into(),
+            },
+            ArgSpec {
+                name: "label".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "Edge label (e.g. KNOWS, ENROLLED_IN).".into(),
+            },
+            ArgSpec {
+                name: "to".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "Target node id ($id).".into(),
+            },
+        ],
+        flags: vec![FlagSpec {
+            name: "props".into(),
+            r#type: FlagType::Json,
+            default: None,
+            allowed: vec![],
+            repeatable: false,
+            help: "Edge properties JSON, e.g. {\"since\":\"2024\"}.".into(),
+            conflicts: vec![],
+            requires: vec![],
+        }],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "edge": 0, "from": 1, "label": "KNOWS", "to": 2 }),
+        auth: Role::Writer,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "graph link b_abc 1 KNOWS 2 --props '{\"since\":\"2024\"}'".into(),
+            description: "Link nodes 1 -> 2 by KNOWS.".into(),
+            response: serde_json::json!({ "ok": true, "edge": 0, "from": 1, "label": "KNOWS", "to": 2 }),
+        }],
+        see_also: vec!["graph.traverse".into(), "graph.search_edges".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "graph".into(),
+        verb: "unlink".into(),
+        summary: "Drop an edge by its edge id.".into(),
+        description: "Removes a specific edge (by the $id returned from graph link or graph search_edges) from the board's tenant graph. Nodes stay intact.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id (also the HelixDB tenantId).".into(),
+            },
+            ArgSpec {
+                name: "edge".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "Edge id ($id).".into(),
+            },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "edge": 0, "removed": true }),
+        auth: Role::Writer,
+        destructive: true,
+        dry_run: true,
+        examples: vec![Example {
+            args: "graph unlink b_abc 3".into(),
+            description: "Drop edge 3.".into(),
+            response: serde_json::json!({ "ok": true, "edge": 3, "removed": true }),
+        }],
+        see_also: vec!["graph.link".into(), "graph.delete".into()],
+        danger_notes: Some("permanently removes the edge".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "graph".into(),
+        verb: "delete".into(),
+        summary: "Drop a node and every edge touching it.".into(),
+        description: "Removes a node (by $id) and ALL edges connected to it in both directions. HelixDB does not cascade edge deletes on node drop, so the adapter removes touching edges explicitly first. Use for graph-level cleanup; to delete a record and its graph wiring use records.delete then graph.delete.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id (also the HelixDB tenantId).".into(),
+            },
+            ArgSpec {
+                name: "node".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "Node id ($id).".into(),
+            },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "node": 5, "removed_edges": 2, "deleted": true }),
+        auth: Role::Writer,
+        destructive: true,
+        dry_run: true,
+        examples: vec![Example {
+            args: "graph delete b_abc 5".into(),
+            description: "Drop node 5 and its edges.".into(),
+            response: serde_json::json!({ "ok": true, "node": 5, "removed_edges": 2, "deleted": true }),
+        }],
+        see_also: vec!["graph.unlink".into(), "records.delete".into()],
+        danger_notes: Some("permanently removes the node and every edge touching it".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "graph".into(),
+        verb: "sync".into(),
+        summary: "Wire a table's records into the graph via *_id references.".into(),
+        description: "Scans a table's records; for every payload field ending in _id (e.g. class_id -> table class/classes), resolves the value (target record seq) to a node id and creates an edge labeled RELATED_<FIELD> from the source record's node to the target node. Idempotent: existing (from,label,to) edges are skipped. Run after submitting records with *_id fields to make the tables traversable as a graph.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id (also the HelixDB tenantId).".into(),
+            },
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "Table to scan for *_id references.".into(),
+            },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "table": "learners", "created": 2, "skipped": 0, "edges": [] }),
+        auth: Role::Writer,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "graph sync b_abc learners".into(),
+            description: "Create edges from learner.class_id to classes records.".into(),
+            response: serde_json::json!({ "ok": true, "table": "learners", "created": 2, "skipped": 0, "edges": [] }),
+        }],
+        see_also: vec!["graph.traverse".into(), "graph.link".into()],
+        danger_notes: Some("Creates edges for every *_id field found; re-run is idempotent.".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "graph".into(),
+        verb: "traverse".into(),
+        summary: "Traverse edges from a node (out/in/both), up to depth hops.".into(),
+        description: "Walks the board's graph from a node id along an edge label (or any edge) in a direction, returning reached nodes. depth=1 is a single hop; depth>1 uses repeat. Tenant scoping is automatic.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id (also the HelixDB tenantId).".into(),
+            },
+            ArgSpec {
+                name: "from".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "Source node id ($id).".into(),
+            },
+        ],
+        flags: vec![
+            FlagSpec {
+                name: "dir".into(),
+                r#type: FlagType::Enum,
+                default: Some("out".into()),
+                allowed: vec!["out".into(), "in".into(), "both".into()],
+                repeatable: false,
+                help: "Traversal direction.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "label".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Edge label to follow (all edges if omitted).".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "depth".into(),
+                r#type: FlagType::Int,
+                default: Some("1".into()),
+                allowed: vec![],
+                repeatable: false,
+                help: "Max hops (1..=10).".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "nodes": [{ "id": 2, "data": {} }], "count": 1 }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "graph traverse b_abc 1 --dir out --label KNOWS --depth 2".into(),
+            description: "2-hop outgoing traversal.".into(),
+            response: serde_json::json!({ "ok": true, "nodes": [], "count": 0 }),
+        }],
+        see_also: vec!["graph.link".into(), "records.query".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "graph".into(),
+        verb: "search_edges".into(),
+        summary: "Full-text search over edge properties (BM25).".into(),
+        description: "Searches a board's edges by BM25 over an edge property. The edge text index is created lazily on first search (async build); searches fall back to a Rust scan until the index is ready. Edges are tenant-scoped like nodes.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "board".into(),
+                r#type: ArgType::Board,
+                required: true,
+                help: "The board id (also the HelixDB tenantId).".into(),
+            },
+            ArgSpec {
+                name: "label".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "Edge label (e.g. KNOWS).".into(),
+            },
+            ArgSpec {
+                name: "property".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "Edge property to search (e.g. since, note).".into(),
+            },
+            ArgSpec {
+                name: "q".into(),
+                r#type: ArgType::Str,
+                required: true,
+                help: "Search query (space-separated tokens).".into(),
+            },
+        ],
+        flags: vec![FlagSpec {
+            name: "limit".into(),
+            r#type: FlagType::Int,
+            default: Some("20".into()),
+            allowed: vec![],
+            repeatable: false,
+            help: "Max results (1..=200).".into(),
+            conflicts: vec![],
+            requires: vec![],
+        }],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "edges": [], "count": 0 }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "graph search_edges b_abc KNOWS since 2024".into(),
+            description: "Find KNOWS edges with since=2024.".into(),
+            response: serde_json::json!({ "ok": true, "edges": [], "count": 0 }),
+        }],
+        see_also: vec!["graph.link".into(), "records.search".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
         group: "jobs".into(),
         verb: "add".into(),
         summary: "Schedule a cron job on a board.".into(),

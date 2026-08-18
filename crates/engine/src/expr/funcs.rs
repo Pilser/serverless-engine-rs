@@ -88,6 +88,81 @@ pub fn invoke(name: &str, args: &[Value], data: &Value) -> Result<Value, ExprErr
             }
             Ok(Value::String(out))
         }
+        "substr" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(arg_err(name, "2..=3", args.len()));
+            }
+            let s = match &args[0] {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let start: usize = match &args[1] {
+                Value::Number(n) => n.as_i64().unwrap_or(0).max(0) as usize,
+                _ => return Err(arg_err(name, "number", args.len())),
+            };
+            let end = if args.len() == 3 {
+                match &args[2] {
+                    Value::Number(n) => Some(n.as_i64().unwrap_or(0).max(0) as usize),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let chars: Vec<char> = s.chars().collect();
+            let slice: String = match end {
+                Some(e) => chars.iter().skip(start).take(e.saturating_sub(start)).collect(),
+                None => chars.iter().skip(start).collect(),
+            };
+            Ok(Value::String(slice))
+        }
+        "replace" => {
+            if args.len() != 3 {
+                return Err(arg_err(name, 3, args.len()));
+            }
+            let s = match &args[0] {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let from = match &args[1] {
+                Value::String(s) => s.clone(),
+                _ => return Err(arg_err(name, "string", args.len())),
+            };
+            let to = match &args[2] {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            Ok(Value::String(s.replace(&from, &to)))
+        }
+        "uuid" => {
+            if !args.is_empty() {
+                return Err(arg_err(name, 0, args.len()));
+            }
+            Ok(Value::String(uuid::Uuid::new_v4().to_string()))
+        }
+        "randhex" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(arg_err(name, "1..=2", args.len()));
+            }
+            let n = match &args[0] {
+                Value::Number(x) => x.as_i64().unwrap_or(8).clamp(1, 32) as usize,
+                _ => 8,
+            };
+            let upper = match args.get(1) {
+                Some(Value::Bool(b)) => *b,
+                _ => true,
+            };
+            let hex: String = (0..n)
+                .map(|_| {
+                    let b = rand_byte();
+                    if upper {
+                        format!("{:X}", b)
+                    } else {
+                        format!("{:x}", b)
+                    }
+                })
+                .collect();
+            Ok(Value::String(hex))
+        }
         "round" => num_fmt(name, args, |f, d| {
             let m = 10f64.powi(d as i32);
             (f * m).round() / m
@@ -277,4 +352,17 @@ fn date_part(
 
 fn arg_err(name: &str, want: impl std::fmt::Display, got: usize) -> ExprError {
     ExprError::new(0, format!("{name} expects {want} args, got {got}"))
+}
+
+/// Cheap pseudo-random byte for `randhex`/`uuid`-ish derivations. Uses the
+/// system time + an atomic counter so consecutive calls differ.
+fn rand_byte() -> u8 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CTR: AtomicU64 = AtomicU64::new(0);
+    let c = CTR.fetch_add(1, Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    ((t ^ c) & 0xff) as u8
 }

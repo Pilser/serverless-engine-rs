@@ -174,9 +174,14 @@ pub fn recipe_enabled(db: &mut dyn Database, board_id: &str, name: &str, enabled
         let mut working = payload.clone();
         let mut logs: Vec<String> = Vec::new();
         let _ = run_actions(db, board_id, table, &recipe, &mut working, &mut logs);
+        for l in &logs {
+            eprintln!("[recipe {}] {l}", recipe.name);
+        }
         let _ = recipe_dedup_mark(&mut *db, board_id, &recipe, &payload);
         if working != payload && seq.is_some() && matches!(event, EventKind::Created | EventKind::Updated) {
-            let _ = crate::crud::record_set_raw(&mut *db, board_id, table, seq.unwrap(), working);
+            if let Err(e) = crate::crud::record_set_raw(&mut *db, board_id, table, seq.unwrap(), working) {
+                eprintln!("[recipe {}] write-back failed: {e}", recipe.name);
+            }
         }
     }
     Ok(())

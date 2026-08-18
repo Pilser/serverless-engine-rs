@@ -13,7 +13,12 @@ pub struct Client {
 impl Client {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let base = base_url.into().trim_end_matches('/').to_string();
+        // Disable keep-alive: under sustained sequential loads (graph sync,
+        // bulk migration) reqwest can reuse a connection Helix has closed,
+        // producing "error sending request" transport errors. A fresh
+        // connection per request is slower but reliable.
         let http = reqwest::blocking::Client::builder()
+            .pool_max_idle_per_host(0)
             .build()
             .map_err(Error::Http)?;
         Ok(Self { base, http, timeout_ms: 30_000 })
@@ -47,6 +52,9 @@ impl Client {
                     // Only retry transport-level failures; HTTP status errors
                     // (e.g. index_not_found) are deterministic.
                     let retryable = matches!(e, Error::Http(_));
+                    if retryable {
+                        eprintln!("[helix] retry {}/3 after error: {e}", attempt + 1);
+                    }
                     last_err = Some(e);
                     if !retryable {
                         break;
@@ -59,13 +67,27 @@ impl Client {
     }
 
     fn try_execute(&self, url: &str, envelope: &Json) -> Result<Response> {
-        let resp = self
+        // Debug: when HELIX_DEBUG=1, print every outgoing envelope (truncated)
+        // so a hanging/rejected request can be reproduced exactly against Helix.
+        if std::env::var("HELIX_DEBUG").as_deref() == Ok("1") {
+            let debug_body = serde_json::to_string(envelope).unwrap_or_default();
+            let shown = if debug_body.len() > 2000 { &debug_body[..2000] } else { &debug_body };
+            eprintln!("[helix] {url} <- {shown}");
+        }
+        let t0 = std::time::Instant::now();
+        let send = self
             .http
             .post(url)
             .timeout(std::time::Duration::from_millis(self.timeout_ms))
             .json(envelope)
-            .send()
-            .map_err(Error::Http)?;
+            .send();
+        if std::env::var("HELIX_DEBUG").as_deref() == Ok("1") {
+            match &send {
+                Ok(_) => eprintln!("[helix] {url} took {}ms", t0.elapsed().as_millis()),
+                Err(e) => eprintln!("[helix] {url} FAILED after {}ms: {e}", t0.elapsed().as_millis()),
+            }
+        }
+        let resp = send.map_err(Error::Http)?;
         let status = resp.status();
         let text = resp.text().map_err(Error::Http)?;
         if !status.is_success() {

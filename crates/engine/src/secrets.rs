@@ -5,7 +5,7 @@ use crate::tables::{scoped_key, TABLE_APP_SECRETS};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand::RngCore;
+use rand::RngExt;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -45,9 +45,9 @@ pub fn fingerprint(plain: &[u8]) -> String {
 pub fn encrypt_value(plaintext: &[u8]) -> anyhow::Result<String> {
     let cipher = Aes256Gcm::new_from_slice(&master_key()).map_err(|e| anyhow::anyhow!("key: {e}"))?;
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ct = cipher.encrypt(nonce, plaintext).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+    rand::rng().fill(&mut nonce_bytes);
+    let nonce = Nonce::from(nonce_bytes);
+    let ct = cipher.encrypt(&nonce, plaintext).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
     let mut blob = nonce_bytes.to_vec();
     blob.extend_from_slice(&ct);
     Ok(base64::engine::general_purpose::STANDARD.encode(&blob))
@@ -62,8 +62,9 @@ pub fn decrypt_value(encoded: &str) -> anyhow::Result<Vec<u8>> {
     }
     let cipher = Aes256Gcm::new_from_slice(&master_key()).map_err(|e| anyhow::anyhow!("key: {e}"))?;
     let (nonce, ct) = blob.split_at(NONCE_LEN);
+    let nonce = Nonce::from(<[u8; NONCE_LEN]>::try_from(nonce).map_err(|_| anyhow::anyhow!("nonce len"))?);
     let pt = cipher
-        .decrypt(Nonce::from_slice(nonce), ct)
+        .decrypt(&nonce, ct)
         .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
     Ok(pt)
 }

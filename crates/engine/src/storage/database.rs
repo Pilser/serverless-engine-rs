@@ -131,6 +131,17 @@ pub trait Database: Send + Sync + 'static {
         anyhow::bail!("graph links are not supported by the {} backend", self.adapter())
     }
 
+    /// Create MANY edges in one write batch (much cheaper than N `link` calls
+    /// for graph sync). Each entry is (from_node_id, label, to_node_id).
+    /// Returns the created edge ids.
+    fn link_batch(
+        &mut self,
+        _board: &str,
+        _edges: &[(i64, String, i64)],
+    ) -> anyhow::Result<Vec<i64>> {
+        anyhow::bail!("graph batch links are not supported by the {} backend", self.adapter())
+    }
+
     /// Traverse from a node along an edge label (out/in/both), optionally
     /// multi-hop. Returns reached node ids with their data.
     fn traverse(

@@ -7,6 +7,18 @@ use std::sync::Arc;
 
 pub type Notify = Arc<dyn Fn(String, String, i64, Json) + Send + Sync>;
 
+/// Naive English pluralization for graph-sync target-table discovery:
+/// `class`->`classes`, `category`->`categories`, `box`->`boxes`, else +s.
+fn pluralize(s: &str) -> String {
+    if s.ends_with("ss") || s.ends_with("sh") || s.ends_with("ch") || s.ends_with("x") {
+        format!("{s}es")
+    } else if s.ends_with('y') && !s.ends_with("ay") && !s.ends_with("ey") && !s.ends_with("oy") && !s.ends_with("uy") {
+        format!("{}ies", &s[..s.len() - 1])
+    } else {
+        format!("{s}s")
+    }
+}
+
 /// Facade over the whole serverless engine. Owns a `Database` and an
 /// `ObjectStore`; every operation in the system goes through here.
 pub struct ServerlessEngine {
@@ -111,6 +123,9 @@ impl ServerlessEngine {
         // (e.g. many learners -> same class) resolve once, not per record.
         let mut target_cache: std::collections::HashMap<(String, String), Option<i64>> =
             std::collections::HashMap::new();
+        // Collect edges, then flush via link_batch in chunks (one write batch
+        // per chunk instead of one HTTP round-trip per edge).
+        let mut pending: Vec<(i64, String, i64, String, String)> = Vec::new(); // from, label, to, field, target_table
         for rec in &records {
             let Some(from) = rec.payload.get("_node_id").and_then(|v| v.as_i64()) else {
                 continue;
@@ -139,22 +154,35 @@ impl ServerlessEngine {
                     continue;
                 };
                 let label = format!("RELATED_{}", target_table.to_uppercase());
-                // Per-ref resilience: a single bad ref (malformed value, node
-                // already gone, transient error) must not abort the whole sync.
-                // Skip and report it; the sync is idempotent so a re-run fixes
-                // anything skipped.
-                let edge = match self.db.link(board, from, &label, to, &serde_json::json!({})) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        skipped += 1;
-                        let _ = e;
-                        continue;
+                pending.push((from, label, to, field.to_string(), target_table.to_string()));
+            }
+        }
+        // Flush in chunks of 20 edges per write batch.
+        const CHUNK: usize = 20;
+        for chunk in pending.chunks(CHUNK) {
+            let batch: Vec<(i64, String, i64)> = chunk.iter().map(|(f, l, t, _, _)| (*f, l.clone(), *t)).collect();
+            match self.db.link_batch(board, &batch) {
+                Ok(ids) => {
+                    for ((from, label, to, field, target_table), edge) in chunk.iter().zip(ids) {
+                        created.push(serde_json::json!({
+                            "from": from, "label": label, "to": to, "edge": edge,
+                            "field": field, "target_table": target_table,
+                        }));
                     }
-                };
-                created.push(serde_json::json!({
-                    "from": from, "label": label, "to": to, "edge": edge,
-                    "field": field, "target_table": target_table,
-                }));
+                }
+                Err(_) => {
+                    // Transient batch failure: fall back to per-edge links so
+                    // a bad edge doesn't lose the whole chunk.
+                    for (from, label, to, field, target_table) in chunk {
+                        match self.db.link(board, *from, label, *to, &serde_json::json!({})) {
+                            Ok(edge) => created.push(serde_json::json!({
+                                "from": from, "label": label, "to": to, "edge": edge,
+                                "field": field, "target_table": target_table,
+                            })),
+                            Err(_) => skipped += 1,
+                        }
+                    }
+                }
             }
         }
         Ok(serde_json::json!({
@@ -176,7 +204,23 @@ impl ServerlessEngine {
         target_table: &str,
         ref_value: &Json,
     ) -> anyhow::Result<Option<i64>> {
-        let candidates = [target_table.to_string(), format!("{target_table}s")];
+        if std::env::var("HELIX_DEBUG").as_deref() == Ok("1") {
+            eprintln!("[sync] resolve {source_table}.{target_table} = {ref_value}");
+        }
+        // Candidate table names for the ref: the field-derived name, its
+        // plural (handles class->classes, category->categories), and the
+        // singular/known aliases the migration uses (e.g. user->profiles).
+        let mut candidates = vec![target_table.to_string()];
+        let plural = pluralize(target_table);
+        if plural != target_table {
+            candidates.push(plural);
+        }
+        if target_table == "user" {
+            candidates.push("profiles".to_string());
+        }
+        if target_table == "teacher" {
+            candidates.push("profiles".to_string());
+        }
         for t in &candidates {
             if t == source_table {
                 continue; // skip self-table refs (would be self-loops)

@@ -198,6 +198,10 @@ impl Database for CachedDatabase {
         self.inner.link(board, from, label, to, props)
     }
 
+    fn link_batch(&mut self, board: &str, edges: &[(i64, String, i64)]) -> anyhow::Result<Vec<i64>> {
+        self.inner.link_batch(board, edges)
+    }
+
     fn traverse(
         &self,
         board: &str,

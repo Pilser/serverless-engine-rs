@@ -226,9 +226,18 @@ async fn run_ws(
     };
 
     let initial: Vec<String> = {
-        let e = server.engine.lock().unwrap();
-        e.records_after(&board, after)
-            .unwrap_or_default()
+        // Blocking Helix read (records_after) must run on the blocking thread
+        // pool, not the async WS task.
+        let engine = server.engine.clone();
+        let b = board.clone();
+        let a = after;
+        let initial_rows = tokio::task::spawn_blocking(move || {
+            let e = engine.lock().unwrap();
+            e.records_after(&b, a).unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+        initial_rows
             .into_iter()
             .filter(|r| filter_matches(&filter_json, &r.payload))
             .map(|record| event_text(&board, "created", record.seq, Some(&record)))

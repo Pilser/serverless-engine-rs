@@ -72,6 +72,15 @@ pub fn spawn_scheduler(engine: Arc<Mutex<ServerlessEngine>>) {
 }
 
 async fn run_job(engine: Arc<Mutex<ServerlessEngine>>, job: Job) {
+    // The job body (engine lock + blocking http_call + insert) uses the
+    // blocking reqwest client; run it on the blocking thread pool, never on an
+    // async worker (stalls after ~128 requests otherwise).
+    let engine2 = engine.clone();
+    let job2 = job.clone();
+    let _ = tokio::task::spawn_blocking(move || run_job_blocking(engine2, job2)).await;
+}
+
+fn run_job_blocking(engine: Arc<Mutex<ServerlessEngine>>, job: Job) {
     let now = fmt_now();
     let started = std::time::Instant::now();
     let next = engine::cron::next_run(&job.schedule, chrono::Utc::now().naive_utc())

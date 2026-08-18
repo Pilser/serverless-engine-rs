@@ -32,7 +32,7 @@ impl ObjectStore for FsObjectStore {
         std::fs::write(&path, bytes)?;
         let mut hasher = Sha256::new();
         hasher.update(bytes);
-        let hex = format!("{:x}", hasher.finalize());
+        let hex = hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect::<String>();
         let size = bytes.len() as u64;
         Ok(PutInfo { key: key.to_string(), size, sha256: hex })
     }
@@ -54,7 +54,7 @@ impl ObjectStore for FsObjectStore {
         let bytes = std::fs::read(&path)?;
         let mut hasher = Sha256::new();
         hasher.update(&bytes);
-        let hex = format!("{:x}", hasher.finalize());
+        let hex = hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect::<String>();
         Ok(Some(BlobMeta {
             key: key.to_string(),
             size,

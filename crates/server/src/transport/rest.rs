@@ -219,13 +219,49 @@ pub async fn handle(
                     .unwrap(),
             ));
         }
-        let principal = principal_of(&server, board, &headers, None);
-        if let Some(resp) = static_site(&server, board, &rel, &principal) {
+        // The engine + helixdb backend use a blocking reqwest client. Running
+        // it on a tokio async worker stalls after ~128 requests, so static
+        // site serving (which locks the engine) runs on the blocking pool.
+        let server2 = server.clone();
+        let board2 = board.to_string();
+        let rel2 = rel.clone();
+        let headers2 = headers.clone();
+        let static_resp =
+            tokio::task::spawn_blocking(move || static_site(&server2, &board2, &rel2, &principal_of(&server2, &board2, &headers2, None))).await;
+        if let Ok(Some(resp)) = static_resp {
             return Ok(resp);
         }
     }
 
-    let resp = route(&server, &method, &segs, &headers, &body_bytes, &params).await;
+    // Same blocking-client constraint: dispatch the whole route (engine lock +
+    // blocking Helix/HTTP) to the blocking thread pool.
+    let server2 = server.clone();
+    let segs_owned: Vec<String> = segs.iter().map(|s| s.to_string()).collect();
+    let tail_owned: Vec<String> = segs_owned.iter().skip(3).cloned().collect();
+    // SSE events is the only async branch (streaming); handle it here.
+    if method == Method::GET
+        && (tail_owned.len() == 1 && tail_owned[0] == "events"
+            || tail_owned.len() == 2 && tail_owned[0] == "events" && tail_owned[1] == "stream")
+    {
+        let after: i64 = params.get("after").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let board = &segs_owned[2];
+        let sse = super::sse::sse_response(
+            server.engine.clone(),
+            server.broker.clone(),
+            board.to_string(),
+            after,
+        );
+        let body = sse.map(|s| http_body_util::combinators::BoxBody::new(s));
+        return Ok(body);
+    }
+    let resp = match tokio::task::spawn_blocking(move || {
+        route_blocking(&server2, &method, &segs_owned, &headers, &body_bytes, &params)
+    })
+    .await
+    {
+        Ok(resp) => resp,
+        Err(_) => err_json(StatusCode::INTERNAL_SERVER_ERROR, "handler panicked"),
+    };
     Ok(resp)
 }
 
@@ -361,34 +397,27 @@ fn principal_of(server: &Server, board_id: &str, headers: &http::HeaderMap, scop
 
 pub use super::rest_admin::handle_admin;
 
-async fn route(
+/// Blocking route dispatch. Runs on the tokio blocking thread pool (see
+/// `handle`): the engine + helixdb backend use a blocking reqwest client that
+/// must not run on an async worker. SSE streaming is handled in `handle`
+/// before this is called.
+fn route_blocking(
     server: &Server,
     method: &Method,
-    segs: &[&str],
+    segs: &[String],
     headers: &http::HeaderMap,
     body: &Bytes,
     params: &HashMap<String, String>,
 ) -> Response<BoxBodyResp> {
-    if segs.first() == Some(&"healthz") && *method == Method::GET {
+    if segs.first().map(|s| s.as_str()) == Some("healthz") && *method == Method::GET {
         return ok_json(json!({ "ok": true }));
     }
     if segs.len() < 3 || segs[0] != "api" || segs[1] != "srv" {
         return err_json(StatusCode::NOT_FOUND, "not found");
     }
-    let board = segs[2];
-    let tail = &segs[3..];
-
-    if *method == Method::GET && matches!(tail, ["events"] | ["events", "stream"]) {
-        let after: i64 = params.get("after").and_then(|v| v.parse().ok()).unwrap_or(0);
-        let sse = super::sse::sse_response(
-            server.engine.clone(),
-            server.broker.clone(),
-            board.to_string(),
-            after,
-        );
-        let body = sse.map(|s| http_body_util::combinators::BoxBody::new(s));
-        return body;
-    }
+    let board = segs[2].as_str();
+    let tail: Vec<&str> = segs[3..].iter().map(|s| s.as_str()).collect();
+    let tail = tail.as_slice();
 
     let scope = params.get("scope").map(|s| s.as_str());
     let principal = principal_of(server, board, headers, scope);

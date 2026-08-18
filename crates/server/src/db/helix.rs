@@ -768,6 +768,45 @@ impl Database for HelixDatabase {
         Ok(edge_id)
     }
 
+    fn link_batch(&mut self, board: &str, edges: &[(i64, String, i64)]) -> anyhow::Result<Vec<i64>> {
+        let tenant = self.tenant(board);
+        // One write batch with one add_e entry per edge; `to` uses ids
+        // directly (no var binding needed). Chunked by the caller.
+        let mut entries = Vec::with_capacity(edges.len());
+        let mut returns = Vec::with_capacity(edges.len());
+        for (i, (from, label, to)) in edges.iter().enumerate() {
+            let name = format!("e{i}");
+            let tenant_prop = json!(helixdb::tenant::TENANT_PROP);
+            let root = json!({
+                "add_e": {
+                    "input": { "nodes": { "reference": { "ids": [from] } } },
+                    "label": label,
+                    "to": { "ids": [to] },
+                    "properties": [
+                        [tenant_prop, { "value": { "string": tenant.as_str() } }]
+                    ]
+                }
+            });
+            entries.push(request::entry(&name, root));
+            returns.push(name);
+        }
+        let batch = request::write_batch(entries, returns.iter().map(|s| s.as_str()).collect());
+        let resp = self.client.post("write", "link_batch", batch)?;
+        let mut out = Vec::with_capacity(edges.len());
+        for (i, (_, _, _)) in edges.iter().enumerate() {
+            let name = format!("e{i}");
+            let id = resp
+                .get(&name)
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|e| e.get("$id"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            out.push(id);
+        }
+        Ok(out)
+    }
+
     fn traverse(
         &self,
         board: &str,
@@ -1129,9 +1168,13 @@ impl HelixDatabase {
         let mut body = serde_json::Map::new();
         body.insert("input".into(), src);
         body.insert("function".into(), function);
+        // Helix requires `property` on aggregate_by even for count; `seq` is a
+        // safe no-op property for counting nodes.
         if let Some(p) = prop {
             body.insert("property".into(), json!(p));
-        } else if agg != engine::storage::ir::Agg::Count {
+        } else if agg == engine::storage::ir::Agg::Count {
+            body.insert("property".into(), json!(SEQ_PROP));
+        } else {
             return Ok(None); // non-count needs a mirrored field
         }
         if let Some(g) = group_by {

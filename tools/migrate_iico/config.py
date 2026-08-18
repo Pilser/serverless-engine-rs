@@ -21,7 +21,7 @@ SRC_DB_NAME = _env("IICO_DB_NAME", "postgres")
 # ---- destination: the serverless engine ------------------------------------
 ENGINE_BASE = _env("ENGINE_BASE", "http://127.0.0.1:7070")
 # Fresh board (HelixDB tenant) for the graph-first migration.
-BOARD = _env("BOARD", "b_8se1o3ansrkd0000")
+BOARD = _env("BOARD", "b_7z5lr8zaurkd0000")
 OWNER_TOKEN = _env("OWNER_TOKEN", BOARD)  # board id bearer = owner role
 
 # ---- migration behaviour ----------------------------------------------------

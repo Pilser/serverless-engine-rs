@@ -1,4 +1,5 @@
 use crate::McpServer;
+use serde_json::json;
 use std::sync::Arc;
 
 pub async fn handle_hyper(
@@ -18,7 +19,20 @@ pub async fn handle_hyper(
         }
     };
     let text = String::from_utf8_lossy(&collected);
-    let out = crate::handle_jsonrpc(&mcp, &text);
+    // The engine + helixdb backend use a blocking reqwest client. Running it
+    // directly on a tokio async worker stalls the blocking client's internal
+    // runtime after ~128 requests, so dispatch to the blocking thread pool.
+    let mcp = mcp.clone();
+    let text = text.to_string();
+    let out = match tokio::task::spawn_blocking(move || crate::handle_jsonrpc(&mcp, &text)).await {
+        Ok(out) => out,
+        Err(_) => {
+            return json_response(
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"internal error"}})
+                    .to_string(),
+            );
+        }
+    };
     json_response(out)
 }
 

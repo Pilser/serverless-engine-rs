@@ -235,7 +235,7 @@ impl ObjectStore for InMemoryObjectStore {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         let digest = hasher.finalize();
-        let hex = format!("{:x}", digest);
+        let hex = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
         let size = bytes.len() as u64;
         let meta = BlobMeta {
             key: key.to_string(),

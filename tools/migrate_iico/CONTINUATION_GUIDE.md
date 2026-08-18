@@ -146,11 +146,24 @@ The SQL triggers below still need recipe ports (each verified with a live test):
 - [ ] `proc_audit_log` — engine audit flag per board (off currently).
 
 ### Phase 4 remaining — frontend data layer (facade exists, needs live data pass)
-- The supabase facade is built and the build passes, but the app has NOT been
-  run against real data end-to-end. Next: load the app at
-  `/srv/<board>/`, log in as admin, and click through key screens
-  (learners, attendance, approvals, inventory) — fix facade gaps as they appear
-  (RPC stubs still return "not yet ported"; storage is a stub).
+- [x] LIVE VERIFIED 2026-08-18 (Chrome via agent-browser): admin@alheib.com logs
+      in, dashboard renders the full nav, Learners & Classes shows real migrated
+      data (learner names, fee amounts). Data reads/writes work through the
+      facade (eq/gte/in/order/ilike/aggregate + insert/resolveSeq/patch/delete).
+- [x] Fixed runtime crashes: QueryBuilder.then() now returns a real Promise
+      (.then().catch() chains); added top-level removeChannel + channel registry.
+- [x] apiFetch prefixes all relative paths with /api/srv/<board> (was hitting
+      the daemon root -> 404 on every call).
+- [x] RPCs mapped to engine ops: advance_*_request -> PATCH stage (recipes
+      cascade), assign_user_role -> /auth/role, create_asset -> insert,
+      delete_* -> delete. Unknown RPCs -> "not yet ported".
+- [ ] Still stubbed: storage (upload/download/remove) returns "not yet ported";
+      the app's file upload screens (documents, signatures) won't work yet.
+- [ ] Gotcha: the engine serves assets with cache-control max-age=3600, so after
+      a rebuild the browser keeps old chunk hashes for up to an hour. Use a
+      fresh browser session (agent-browser close --all + reopen) to verify, or
+      bump asset versions. Old chunks accumulate in the board assets (the
+      build-static.sh pushes but never deletes).
 
 ### Phase 5 — graph optimization (future)
 - Graph-based stock: derive quantity by traversing `RELATED_ITEM` edges instead

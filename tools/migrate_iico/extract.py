@@ -18,7 +18,7 @@ from config import (
     SRC_DB_NAME,
 )
 
-SSH_TIMEOUT = 60  # seconds
+SSH_TIMEOUT = 300  # seconds (big tables like audit_log/in_app_notifications need longer)
 
 
 def log(msg: str) -> None:

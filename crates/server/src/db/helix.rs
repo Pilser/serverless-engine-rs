@@ -602,7 +602,7 @@ impl Database for HelixDatabase {
         let indexed = self.is_text_indexed(tenant.as_str(), &label);
         let mut entries: Vec<Json> = Vec::with_capacity(rows.len());
         let mut seqs = Vec::with_capacity(rows.len());
-        for row in &rows {
+        for (i, row) in rows.iter().enumerate() {
             let mut props: Vec<(String, Json)> = Vec::new();
             props.push((DATA_PROP.to_string(), json!(row.data.to_string())));
             for (k, v) in routing_props(&row.data) {
@@ -621,13 +621,16 @@ impl Database for HelixDatabase {
                 Key::Text(s) => json!(s),
             };
             props.push((helixdb::row::KEY_PROP.to_string(), keyval_scalar));
-            entries.push(request::add_n(&label, tenant.as_str(), &props));
+            let root = request::add_n(&label, tenant.as_str(), &props);
+            entries.push(request::entry(&format!("r{i}"), root));
             seqs.push(match &row.key {
                 Key::Int(v) => *v,
                 Key::Text(_) => 0,
             });
         }
-        let batch = request::write_batch(entries, vec!["created"]);
+        let returns: Vec<String> = (0..entries.len()).map(|i| format!("r{i}")).collect();
+        let returns_refs: Vec<&str> = returns.iter().map(|s| s.as_str()).collect();
+        let batch = request::write_batch(entries, returns_refs);
         let _ = self.client.post("write", "write_batch", batch)?;
         Ok(seqs)
     }

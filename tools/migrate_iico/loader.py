@@ -26,7 +26,7 @@ from config import (
     SKIP_EXISTING_USERS,
 )
 
-REQ_TIMEOUT = 60
+REQ_TIMEOUT = 120
 
 
 def flush_print(*a, **k):

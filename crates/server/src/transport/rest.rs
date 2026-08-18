@@ -653,11 +653,6 @@ fn file(
         Some(f) if !f.is_empty() => f.clone(),
         _ => return err_json(StatusCode::BAD_REQUEST, "invalid file"),
     };
-    let full = if file.starts_with("files/") {
-        format!("{board}/{file}")
-    } else {
-        file
-    };
     let app = server.engine.lock().unwrap().get_app(board).ok().flatten();
     let Some(app) = app else {
         return err_json(StatusCode::NOT_FOUND, "not found");
@@ -666,6 +661,30 @@ fn file(
         return err_json(StatusCode::FORBIDDEN, "private board");
     }
     let table = params.get("table").map(|t| t.as_str()).unwrap_or("files").to_string();
+    // Resolve the blob key: `files/...` is used as-is (board-prefixed); a bare
+    // path is looked up in the table's records by `name` (the upload stores
+    // `name` = the original path, `file` = the blob key).
+    let full = if file.starts_with("files/") {
+        format!("{board}/{file}")
+    } else {
+        let engine = server.engine.lock().unwrap();
+        let sf = engine::storage::ir::SrvFilter {
+            conds: vec![engine::storage::ir::FilterCond {
+                field: "$.name".to_string(),
+                op: engine::storage::ir::Op::Eq,
+                value: serde_json::Value::String(file.clone()),
+            }],
+        };
+        let found = engine
+            .query_records(board, &table, &sf, &[], 1, 0)
+            .ok()
+            .and_then(|rs| rs.into_iter().next())
+            .and_then(|r| r.payload.get("file").and_then(|v| v.as_str()).map(String::from));
+        match found {
+            Some(blob) => blob,
+            None => file.clone(),
+        }
+    };
     let engine = server.engine.lock().unwrap();
     match engine.download(board, &table, &full) {
         Ok(Some((data, content_type))) => {

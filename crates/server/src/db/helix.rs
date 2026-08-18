@@ -645,8 +645,17 @@ impl Database for HelixDatabase {
             let keyval = json!({ "string": board });
             return self.get_by_key(tenant.as_str(), &engine_label("wb_apps"), keyval);
         }
-        let board = board_from_key(&table, pk)
-            .ok_or_else(|| anyhow::anyhow!("cannot route {table} get"))?;
+        let Some(board) = board_from_key(&table, pk) else {
+            // Tables like wb_sessions / wb_keys / wb_hook_deliveries /
+            // wb_job_runs use bare uuid keys that don't encode the board. The
+            // node's `_srv_key` is unique per label, so look it up across
+            // tenants and take the first match.
+            let keyval = match pk {
+                Key::Int(v) => json!({ "i64": v }),
+                Key::Text(s) => json!({ "string": s }),
+            };
+            return self.get_by_key_any_tenant(&engine_label(&table), keyval);
+        };
         let tenant = self.tenant(&board);
         let keyval = match pk {
             Key::Int(v) => json!({ "i64": v }),
@@ -1144,6 +1153,27 @@ impl HelixDatabase {
             }
         }
         Ok(out)
+    }
+
+    /// Look up a node by `_srv_key` across every board tenant (for tables whose
+    /// keys are bare uuids: wb_sessions, wb_keys, wb_hook_deliveries, ...).
+    fn get_by_key_any_tenant(&self, label: &str, keyval: Json) -> anyhow::Result<Option<Row>> {
+        let src = json!({
+            "nodes_where": { "predicate": {
+                "and": { "predicates": [
+                    { "eq": { "left": { "property": "$label" }, "right": { "constant": { "string": label } } } },
+                    { "eq": { "left": { "property": helixdb::row::KEY_PROP }, "right": { "constant": keyval } } }
+                ]}
+            }}
+        });
+        let root = request::value_map(src, vec!["$id", DATA_PROP, helixdb::row::KEY_PROP]);
+        let batch = request::read_batch(vec![request::entry("row", root)], vec!["row"]);
+        let resp = self.client.post("read", "get_any_tenant", batch)?;
+        let mut nodes = resp.rows("row");
+        if nodes.is_empty() {
+            return Ok(None);
+        }
+        node_to_row(&nodes.swap_remove(0), label).map(Some)
     }
 
     fn boards_by_owner(&self, owner: &str) -> anyhow::Result<Vec<String>> {

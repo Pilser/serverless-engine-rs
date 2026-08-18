@@ -1,0 +1,10 @@
+[{"email":"storekeeper@alheib.test","password_hash":"$2a$06$W14DLfA/maa9x30JJY3ga.FFkWptVpz/7V9DZlfyCxGMJ.NaFsygu","role":"teacher","id":"43f25e57-b663-4907-9acb-3da984c03ba0","full_name":"storekeeper"}, 
+ {"email":"manager@alheib.test","password_hash":"$2a$06$QCQjJO8N3z0JNV9ZO/Nx9eRaUW/TU9CvrOk3wKOjED7rtVkhJ3zxS","role":"teacher","id":"dd4d242a-b6f9-4905-8b18-657fca818c04","full_name":"manager"}, 
+ {"email":"director@alheib.test","password_hash":"$2a$06$HESabAL6uCgU.92QehEhc.3rgof9x4LoqlGAwA1Nxp0bi6.OztJAK","role":"teacher","id":"f86a5299-86d6-4fe6-9324-fd3c4ae1bbd0","full_name":"director"}, 
+ {"email":"gateman@alheib.test","password_hash":"$2a$10$JP4htMIvwzEypZYCRMB73emIAHcb2KvsEPOEZseAjL7APWRk5/XRu","role":"teacher","id":"97f05bf2-7dd5-4df7-9e41-b346d1be8f00","full_name":"gateman"}, 
+ {"email":"frank.parent@alheib.com","password_hash":"$2a$10$VNHDrYg8GeNCoGPnoqMb9.UR6.r23/BWcOPRyeH1NhY1aZwZ99KNG","role":"teacher","id":"b6aa0684-2d0d-4659-97ba-55f8ab4f3eb7","full_name":"frank"}, 
+ {"email":"office@alheib.test","password_hash":"$2a$10$8yt80wdR1QBoOsGwKUAXKOSFu1jMt830vHaHiN3yqXM0fII7qhIR6","role":"teacher","id":"564ce853-2733-4542-896e-107a239681ae","full_name":"office"}, 
+ {"email":"accountant@alheib.test","password_hash":"$2a$10$Crxx2fH.9fUAw1KRvkEuZO9JAN64DYFE18v67RPTjjIVPyCaCmRqO","role":"teacher","id":"d6fbb89d-4e1c-481d-92ac-7a2f1ff43d54","full_name":"accountant"}, 
+ {"email":"jamalabubakar.orphan_supervisor@alheib.com","password_hash":"$2a$10$jOUZ63XBDQx7MwAl5/jquONA28waYQidugQ5X5nXnyV19XHNj.Qb.","role":"teacher","id":"a0788bfc-3427-45be-b529-dc324b1c013c","full_name":"JAMAL ABUBAKAR"}, 
+ {"email":"teacher@alheib.test","password_hash":"$2a$10$yIsqAt91ow4ugnNoBtizDu.zsDa6vHCWbNIweJpaO0corOkkSy/Sy","role":"teacher","id":"5566efa3-8d2f-4714-b7c2-93a869935588","full_name":"teacher"}, 
+ {"email":"admin@alheib.com","password_hash":"$2a$10$lT1kRI/muFs0QR98rPO3G.ytY/tD5Y7OsZBFVjBUZsCSxnkCHX/4.","role":"admin","id":"ce8993b4-7e21-4be7-a2c1-c08cc741d990","full_name":"Administrator"}]

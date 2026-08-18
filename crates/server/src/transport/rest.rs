@@ -315,12 +315,19 @@ fn static_site(
     }
     let body = Full::new(Bytes::from(data))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    // HTML is always revalidated (so a new build's chunk hashes are picked up);
+    // hashed assets (js/css) keep the long cache.
+    let cache = if content_type.starts_with("text/html") {
+        "no-cache"
+    } else {
+        "public, max-age=3600"
+    };
     Some(
         with_cors(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", content_type)
-                .header("cache-control", "public, max-age=3600")
+                .header("cache-control", cache)
                 .body(BoxBody::new(body))
                 .unwrap(),
         ),

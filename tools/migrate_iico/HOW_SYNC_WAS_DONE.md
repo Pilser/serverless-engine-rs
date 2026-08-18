@@ -1,10 +1,16 @@
 # How the IICO → Engine Full Sync Was Completed
 
+> **HISTORICAL — turso-era record.** This document describes the original sync
+> into the turso backend (board `b_v2qyx0enpqkd0000`, now obsolete). The storage
+> backend is HelixDB and the data is re-migrated fresh; see
+> `MIGRATION_STRATEGY.md` + `SUBAGENT_WORKER.md` for the current graph-first
+> plan. Keep this file only as the historical "how was it done" reference.
+
 This document records the **actual, verified story** of how every table of IICO
-data was moved out of Supabase and into the serverless engine (`board
-b_v2qyx0enpqkd0000`), including the blockers we hit and how each one was solved.
-It is the "how was this possible?" companion to `README.md` (which documents the
-pipeline API).
+data was moved out of Supabase and into the serverless engine (the turso-era
+board `b_v2qyx0enpqkd0000`), including the blockers we hit and how each one was
+solved. It is the "how was this possible?" companion to `README.md` (which
+documents the pipeline API).
 
 > End state (verified 2026-08-17): **64 tables** in the engine, source and
 > engine counts match, and the query layer no longer drops boolean-filtered rows.

@@ -20,66 +20,81 @@ SRC_DB_NAME = _env("IICO_DB_NAME", "postgres")
 
 # ---- destination: the serverless engine ------------------------------------
 ENGINE_BASE = _env("ENGINE_BASE", "http://127.0.0.1:7070")
-BOARD = _env("BOARD", "b_v2qyx0enpqkd0000")
+# Fresh board (HelixDB tenant) for the graph-first migration. The old turso-era
+# board b_v2qyx0enpqkd0000 is obsolete. Set to the board created at migration start.
+BOARD = _env("BOARD", "")
 OWNER_TOKEN = _env("OWNER_TOKEN", BOARD)  # board id bearer = owner role
 
 # ---- migration behaviour ----------------------------------------------------
 BATCH_SIZE = int(_env("MIGRATE_BATCH_SIZE", "100"))
 SKIP_EXISTING_USERS = _env("SKIP_EXISTING_USERS", "1") == "1"
 
-# ---- user-reference columns that must be rewritten UUID -> lowercase email --
-# table -> list of column names holding an auth.users id.
-USER_REF_COLUMNS = {
-    "profiles": ["id", "suspended_by"],
-    "account_appeals": ["user_id"],
-    "advance_requests": ["user_id"],
-    "akhlaaq_reports": ["teacher_id"],
-    "appointments": ["created_by"],
-    "asset_custodians": ["employee_id"],
-    "assets": ["assigned_to_staff"],
-    "attendance": ["recorded_by"],
-    "audit_log": ["user_id"],
-    "class_timetables": ["teacher_id"],
-    "classes": ["teacher_id"],
-    "clinic_visits": ["recorded_by"],
-    "device_employee_mapping": ["user_id"],
-    "digital_homework": ["teacher_id"],
-    "direct_messages": ["to_user"],
-    "dormitories": ["matron_staff_id"],
-    "dormitory_attendance": ["recorded_by"],
-    "email_schedules": ["created_by"],
-    "employee_advances": ["employee_id"],
-    "employees": ["profile_id"],
-    "health_visits": ["recorded_by"],
-    "in_app_notifications": ["created_by", "user_id"],
-    "learners": ["user_id"],
-    "leave_requests": ["user_id"],
-    "lesson_observations": ["teacher_id"],
-    "lesson_plans": ["teacher_id"],
-    "lesson_register": ["teacher_id"],
-    "library_books": ["created_by"],
-    "library_members": ["profile_id"],
-    "meal_records": ["recorded_by"],
-    "medical_incidents": ["recorded_by"],
-    "notifications": ["user_id"],
-    "parent_learner_links": ["parent_user_id"],
-    "payments": ["recorded_by"],
-    "payroll_lines": ["employee_id"],
-    "ple_mock_tests": ["created_by"],
-    "print_order_permissions": ["user_id"],
-    "print_orders": ["created_by"],
-    "quran_progress": ["teacher_id"],
-    "salah_attendance": ["recorded_by"],
-    "salaries": ["user_id"],
-    "scheduled_notifications": ["created_by"],
-    "scheme_of_work": ["teacher_id"],
-    "staff_attendance": ["user_id"],
-    "staff_letters": ["to_user"],
-    "syllabus_coverage": ["teacher_id"],
-    "tailor_tasks": ["recorded_by"],
-    "teacher_assignments": ["teacher_id"],
-    "user_signatures": ["user_id"],
-    "visitors": ["created_by"],
+# ---- graph edge map ---------------------------------------------------------
+# table -> { ref_column: target_table }. Every `*_id` ref is KEPT as the source
+# UUID (no email rewrite — the frontend joins by UUID and the graph model turns
+# refs into RELATED_* edges). After a table loads, run `srv graph sync` to
+# materialize the edges; this map documents the expected relationships for
+# verification (every ref value must exist in the target table's id set).
+GRAPH_EDGES = {
+    "learners": {"class_id": "classes", "user_id": "profiles"},
+    "attendance": {"class_id": "classes", "learner_id": "learners"},
+    "teacher_assignments": {"teacher_id": "profiles", "class_id": "classes", "subject_id": "subjects"},
+    "guardians": {"user_id": "profiles"},
+    "parent_learner_links": {"parent_user_id": "profiles", "learner_id": "learners"},
+    "dormitory_residents": {"dormitory_id": "dormitories", "learner_id": "learners"},
+    "term_results": {"learner_id": "learners", "subject_id": "subjects"},
+    "report_cards": {"learner_id": "learners"},
+    "class_timetables": {"class_id": "classes", "subject_id": "subjects", "teacher_id": "profiles"},
+    "scheme_of_work": {"teacher_id": "profiles", "class_id": "classes", "subject_id": "subjects"},
+    "quran_progress": {"teacher_id": "profiles", "learner_id": "learners"},
+    "syllabus_coverage": {"teacher_id": "profiles", "class_id": "classes", "subject_id": "subjects"},
+    "fee_assignments": {"learner_id": "learners"},
+    "fee_payments": {"learner_id": "learners"},
+    "payments": {"learner_id": "learners", "recorded_by": "profiles"},
+    "employees": {"profile_id": "profiles"},
+    "staff_attendance": {"user_id": "profiles"},
+    "salaries": {"user_id": "profiles"},
+    "payroll_lines": {"employee_id": "employees"},
+    "employee_advances": {"employee_id": "employees"},
+    "assets": {"assigned_to_staff": "profiles", "category_id": "asset_categories"},
+    "asset_custodians": {"employee_id": "employees", "asset_id": "assets"},
+    "clinic_visits": {"learner_id": "learners", "staff_id": "profiles", "recorded_by": "profiles"},
+    "health_visits": {"learner_id": "learners", "recorded_by": "profiles"},
+    "medical_incidents": {"learner_id": "learners", "recorded_by": "profiles"},
+    "discipline_cases": {"learner_id": "learners"},
+    "akhlaaq_reports": {"learner_id": "learners", "teacher_id": "profiles"},
+    "dormitory_attendance": {"dormitory_id": "dormitories", "learner_id": "learners"},
+    "appointments": {"visitor_id": "visitors", "learner_id": "learners", "host_staff_id": "profiles"},
+    "visitors": {"created_by": "profiles"},
+    "in_app_notifications": {"created_by": "profiles", "user_id": "profiles"},
+    "notifications": {"user_id": "profiles"},
+    "direct_messages": {"to_user": "profiles"},
+    "staff_letters": {"to_user": "profiles"},
+    "leave_requests": {"user_id": "profiles"},
+    "account_appeals": {"user_id": "profiles"},
+    "advance_requests": {"user_id": "profiles"},
+    "academic_warnings": {"learner_id": "learners"},
+    "bursar_override_requests": {"learner_id": "learners"},
+    "bursar_rules": {"class_id": "classes"},
+    "budget_requests": {"requester_id": "profiles"},
+    "donations": {"donor_id": "profiles"},
+    "exam_timetable": {"invigilator_id": "profiles"},
+    "email_schedules": {"created_by": "profiles"},
+    "email_logs": {"template_id": "email_templates"},
+    "device_employee_mapping": {"user_id": "profiles", "learner_id": "learners"},
+    "digital_homework": {"class_id": "classes", "subject_id": "subjects", "teacher_id": "profiles"},
+    "lesson_observations": {"teacher_id": "profiles"},
+    "lesson_plans": {"teacher_id": "profiles", "class_id": "classes", "subject_id": "subjects"},
+    "lesson_register": {"teacher_id": "profiles", "class_id": "classes", "subject_id": "subjects"},
+    "library_members": {"profile_id": "profiles"},
+    "library_books": {"created_by": "profiles"},
+    "meal_records": {"recorded_by": "profiles"},
+    "print_orders": {"created_by": "profiles"},
+    "print_order_permissions": {"user_id": "profiles"},
+    "scheduled_notifications": {"created_by": "profiles"},
+    "tailor_tasks": {"recorded_by": "profiles"},
+    "user_signatures": {"user_id": "profiles"},
+    "quran_progress": {"teacher_id": "profiles", "learner_id": "learners"},
 }
 
 # Columns dropped before load (engine uses its own seq/id model).

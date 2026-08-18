@@ -61,10 +61,11 @@ These can be overridden by env vars `IICO_HOST`, `IICO_SSH_USER`, `IICO_SSH_PASS
 ### Destination (the engine)
 ```python
 ENGINE_BASE = "http://127.0.0.1:7070"            # engine daemon
-BOARD       = "b_v2qyx0enpqkd0000"               # the iico tenant board
+BOARD       = "<board id>"                        # the iico HelixDB tenant
 OWNER_TOKEN = BOARD                               # board id bearer = owner role
 ```
-Override via `ENGINE_BASE`, `BOARD`, `OWNER_TOKEN`.
+Override via `ENGINE_BASE`, `BOARD`, `OWNER_TOKEN`. Create the board first with
+`srv apps create 'iico'` and set `BOARD` to the returned id.
 
 ### Behaviour
 ```python
@@ -72,22 +73,26 @@ BATCH_SIZE = 100                # records per bulk POST (env: MIGRATE_BATCH_SIZE
 SKIP_EXISTING_USERS = True      # users that already exist are skipped, not errors
 ```
 
-### The critical map: `USER_REF_COLUMNS`
+### The graph edge map: `GRAPH_EDGES`
 ```python
-USER_REF_COLUMNS = {
-    # table            -> column names that hold an auth.users UUID
-    "profiles":   ["id", "suspended_by"],
-    "account_appeals": ["user_id"],
-    "classes":        ["teacher_id"],
-    # ... ~48 tables
+GRAPH_EDGES = {
+    # table            -> { ref_column: target_table }
+    "learners":    {"class_id": "classes", "user_id": "profiles"},
+    "attendance":  {"class_id": "classes", "learner_id": "learners"},
+    # ... ~60 tables
 }
 ```
-This is the heart of the transform. Any column in this map is rewritten from
-`auth.users.id` (a UUID) → that user's **lowercase email**, because the engine
-keys users by email (plan B: `profiles.id == email`).
+This is the heart of the graph model. **`*_id` UUID references are KEPT as-is**
+(no email rewrite — the frontend `deploy/iico` joins by UUID, and the graph
+turns refs into `RELATED_*` edges). After a table loads, the pipeline:
 
-**When you add a new table**, check whether it has user-reference columns (see
-§5 below) and add them here.
+1. **Verifies referential integrity**: every `*_id` value in the table must
+   exist in the target table's `id` set (from its transformed dump). Orphans
+   fail loudly — this is the anti-hallucination guard.
+2. **Runs `srv graph sync <board> <table>`** (via the MCP endpoint) to create
+   `RELATED_<FIELD>` edges in the board's HelixDB tenant. Idempotent.
+
+**When you add a new table**, add its `*_id` refs to `GRAPH_EDGES`.
 
 ### `RECREATE_TABLES`
 ```python
@@ -160,16 +165,16 @@ The core tables are already migrated. The rest (attendance, report_cards,
 fee_payments, employee/HR, library, finance, discipline, inventory, etc.) are
 done the **exact same way**. For each new table:
 
-### Step 5.1 — Identify user-reference columns
-Query the source to see which columns point at `auth.users.id`. Run this on the
-source (via SSH / docker exec) or use the engine's list. The already-known
-columns are in `USER_REF_COLUMNS`; a full list of tables+columns that hold user
-ids is captured below (from the earlier audit).
-
-If your table has user-ref columns, **add them to `USER_REF_COLUMNS`** in
-`config.py`:
+### Step 5.1 — Identify `*_id` reference columns
+Every column ending in `_id` that points at another table's `id` is a candidate
+edge. Query the source to confirm:
+```sql
+select table_name, column_name, data_type from information_schema.columns
+where column_name like '%_id' and table_schema='public' order by table_name;
+```
+Add the table + refs to `GRAPH_EDGES` in `config.py`:
 ```python
-"new_table": ["teacher_id", "user_id", "created_by"],
+"new_table": {"learner_id": "learners", "teacher_id": "profiles"},
 ```
 
 ### Step 5.2 — (Optional) Add to `CORE_TABLES`
@@ -181,26 +186,31 @@ list in `migrate.py`.
 python3 migrate.py --workdir /tmp/migrate_iico --tables <new_table> --limit 3
 ```
 Check:
-- `transformed/<new_table>.json` — UUID refs are now emails; no stray nulls.
+- `transformed/<new_table>.json` — `*_id` refs are still UUIDs; no stray nulls.
 - The 3 records loaded in the engine (via MCP/REST) look correct.
 
 ### Step 5.4 — Full load
 ```bash
 python3 migrate.py --workdir /tmp/migrate_iico --tables <new_table>
 ```
+This also runs the referential check (`__verify__`) and graph sync
+(`__sync__`) automatically.
 
-### Step 5.5 — Verify counts
-The loader already fails loudly if `loaded != source`. You can also re-check with:
+### Step 5.5 — Verify counts + edges
+The loader already fails loudly if `loaded != source`. Re-check counts and the
+materialized graph:
 ```bash
 curl -s "http://127.0.0.1:7070/api/srv/<BOARD>/tables/<new_table>/aggregate?op=count" \
   -H "Authorization: Bearer <BOARD>"
+srv graph traverse <BOARD> <node_id> --dir out   # confirm RELATED_* edges
 ```
 
 ---
 
-## 6. Known tables needing UUID→email rewrite (full audit)
+## 6. Known `*_id` reference columns (full audit)
 
-From the earlier information_schema scan — 58 columns across 48 tables:
+From the earlier information_schema scan — the reference columns that become
+`RELATED_*` edges (kept as UUIDs, documented in `GRAPH_EDGES`):
 
 | Table | user-ref columns |
 |---|---|
@@ -323,9 +333,13 @@ All requests carry `Authorization: Bearer <BOARD>` (board id → owner role).
 
 ---
 
-## 10. Current migration status (for reference)
+## 10. Migration status
 
-Already migrated and verified (counts match source):
+> **Superseded:** the turso-era migration (counts below) is obsolete — the
+> storage backend is now HelixDB and the data is re-migrated fresh. See
+> `MIGRATION_STRATEGY.md` for the graph-first plan and the live status table.
+
+Historical turso-era counts (for reference only):
 
 | Table | Count |
 |---|---|
@@ -338,7 +352,6 @@ Already migrated and verified (counts match source):
 | guardians | 42 |
 | auth users | 343 |
 
-**Remaining** (not yet migrated): attendance (520), report_cards (468),
-fee_payments, fee_structures, employees, salary/payroll, library, inventory,
-discipline, finance, HR/staff_attendance, and all other public tables — use the
-process in §5 for each.
+**HelixDB graph-first migration:** pending — follow `MIGRATION_STRATEGY.md`
+(manual core tables first, then parallel sub-agents per table group using the
+worker checklist in `SUBAGENT_WORKER.md`).

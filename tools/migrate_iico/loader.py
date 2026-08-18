@@ -96,6 +96,65 @@ def load_table(workdir: str, table: str, count_check: bool = True) -> None:
     flush_print(f"loaded {table}: {total} rows")
 
 
+def verify_references(workdir: str, table: str) -> None:
+    """Referential check: every `*_id` value in `table` must exist in the
+    target table's `id` set (per GRAPH_EDGES). Fail loudly on orphans so a
+    silent-hallucination migration is caught here, not in the app."""
+    from config import GRAPH_EDGES
+
+    refs = GRAPH_EDGES.get(table, {})
+    if not refs:
+        return
+    path = os.path.join(workdir, "transformed", f"{table}.json")
+    with open(path) as f:
+        rows = json.load(f)
+    for col, target in refs.items():
+        # Load the target's id set from its transformed dump (source truth).
+        tpath = os.path.join(workdir, "transformed", f"{target}.json")
+        if not os.path.exists(tpath):
+            flush_print(f"  [verify] {table}.{col} -> {target}: target dump missing, skipped")
+            continue
+        with open(tpath) as f:
+            target_ids = {str(r.get("id")) for r in json.load(f) if r.get("id")}
+        orphans = {str(r[col]) for r in rows if r.get(col) and str(r[col]) not in target_ids}
+        if orphans:
+            sample = sorted(orphans)[:5]
+            raise RuntimeError(
+                f"{table}.{col}: {len(orphans)} orphan refs not in {target}.id (e.g. {sample})"
+            )
+        flush_print(f"  [verify] {table}.{col} -> {target}: {len(rows)} refs all resolve")
+
+
+def graph_sync(board: str, table: str) -> None:
+    """Materialize RELATED_* edges for a table's `*_id` refs via the engine's
+    graph sync (idempotent). Returns after the sync call; edges are created in
+    the board's HelixDB tenant."""
+    from config import GRAPH_EDGES
+
+    if table not in GRAPH_EDGES:
+        return
+    url = f"{ENGINE_BASE}/mcp"
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "graph.sync", "arguments": {"board": board, "table": table}},
+    }).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQ_TIMEOUT) as resp:
+            result = json.loads(resp.read().decode())
+        text = result.get("result", {}).get("content", [{}])[0].get("text", "")
+        flush_print(f"  [graph] sync {table}: {text[:200]}")
+    except Exception as e:  # noqa: BLE001
+        flush_print(f"  [graph] sync {table} FAILED: {e}")
+
+
 def load_users(workdir: str, users: list[dict]) -> None:
     """Import auth.users (email + bcrypt password_hash + role) via dual signup."""
     done = 0
@@ -130,6 +189,10 @@ def main() -> None:
         path = os.path.join(workdir, "raw", "_users.json")
         with open(path) as f:
             load_users(workdir, json.load(f))
+    elif table.startswith("__verify__"):
+        verify_references(workdir, table[len("__verify__"):])
+    elif table.startswith("__sync__"):
+        graph_sync(BOARD, table[len("__sync__"):])
     else:
         load_table(workdir, table)
 

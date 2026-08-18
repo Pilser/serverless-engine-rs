@@ -22,10 +22,14 @@ parameter docs.
 | Create auth user / login / me | `auth_signup` / `auth_login` / `auth_me` |
 | Manage API keys, secrets, jobs, recipes | `keys_*`, `secrets_*`, `jobs_*`, `recipes_*` |
 | Store / read static assets | `files_put` / `files_get` / `files_list` |
+| Link nodes into the graph | `graph_link` / `graph_traverse` / `graph_sync` / `graph_search_edges` / `graph_unlink` / `graph_delete` |
+| Aggregate records (count/sum/avg/min/max) | `records_aggregate` |
 
 ## Board + auth (context you almost always need)
 
-- The IICO tenant board is **`b_v2qyx0enpqkd0000`**.
+- The IICO tenant board id is set in `tools/migrate_iico/config.py` (`BOARD`).
+  Create it with `srv apps create 'iico'` (the old turso-era board
+  `b_v2qyx0enpqkd0000` is obsolete).
 - **All** record/table tools take a `board` param — always pass the board id.
 - Read is fine as the board owner (bearer board id); writes require the matching
   role on that board.

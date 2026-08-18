@@ -19,19 +19,26 @@ import sys
 from config import BATCH_SIZE, BOARD, ENGINE_BASE, OWNER_TOKEN
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Dependency-ordered: entities first, then relationship/fact tables so the
+# graph-sync referential checks (every *_id resolves) pass.
 CORE_TABLES = [
+    # entities (nodes)
     "profiles",
     "classes",
-    "learners",
     "subjects",
+    "learners",
     "guardians",
+    "dormitories",
+    "rooms",
+    "employees",
+    "visitors",
+    # relationships + facts (edges via graph sync)
+    "parent_learner_links",
+    "teacher_assignments",
     "user_roles",
     "term_results",
     "attendance",
-    "employees",
     "report_cards",
-    "teacher_assignments",
-    "parent_learner_links",
     "fee_structures",
     "fee_assignments",
     "payments",
@@ -112,6 +119,9 @@ def main() -> None:
         run(args.workdir, "transform.py", [table], args.force)
         run(args.workdir, "loader.py", [table], args.force)
         if args.limit is None:
+            # Full load: verify refs + materialize graph edges.
+            run(args.workdir, "loader.py", [f"__verify__{table}"], args.force)
+            run(args.workdir, "loader.py", [f"__sync__{table}"], args.force)
             done.add(table)
             write_done(args.workdir, done)
 

@@ -255,6 +255,11 @@ fn conditions_pass(when: &Json, payload: &Json) -> bool {
     true
 }
 
+/// Template-substitute `{{$.path}}` in a string and return the result.
+pub fn subst_strings_str(pattern: &str, payload: &Json) -> anyhow::Result<String> {
+    template_swap(payload, pattern)
+}
+
 pub fn template_swap(payload: &Json, value: &str) -> anyhow::Result<String> {
     let mut out = String::new();
     let mut rest = value;
@@ -586,6 +591,23 @@ fn apply_action(
             } else {
                 logs.push(format!("$resolve_other: no row in {tbl} matched {filter}"));
             }
+        }
+        // "$create_user": create an engine auth user (email + password) from the
+        // triggering payload and write the resulting email into `into` (default
+        // $.created_user_email). Ports auto_create_student_account (student
+        // portal accounts). The engine's users are email-keyed, so the learner's
+        // user_id becomes the email, not a source UUID.
+        //   {"$create_user":{"email":"{{$.email}}","password":"{{$.password}}","role":"student","into":"$.user_id"}}
+        "$create_user" => {
+            let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$create_user must be an object"))?;
+            let email = subst_strings_str(obj.get("email").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("$create_user needs \"email\""))?, payload)?;
+            let password = subst_strings_str(obj.get("password").and_then(|v| v.as_str()).unwrap_or("MigrationTempPass2026"), payload)?;
+            let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("student");
+            let into = obj.get("into").and_then(|v| v.as_str()).unwrap_or("$.created_user_email");
+            let principal = Principal { id: board_id.to_string(), role: "owner".to_string(), scope: None, writer: None };
+            let user = crate::auth::user_signup(db, board_id, &email, &password, None, role, &principal)
+                .map_err(|e| anyhow::anyhow!("$create_user: {e}"))?;
+            set_at(payload, into, Json::String(user.email))?;
         }
         "$transaction" => {
             let steps = val.as_array().ok_or_else(|| anyhow::anyhow!("$transaction must be an array"))?;

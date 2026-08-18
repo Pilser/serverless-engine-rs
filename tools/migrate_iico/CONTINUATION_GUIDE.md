@@ -1,166 +1,234 @@
-# Migration Continuation Guide — IICO → HelixDB
+# IICO → Serverless Engine — Continuation Guide (Phase 3)
 
-How to continue the IICO data migration into the serverless engine (HelixDB
-backend). Written for agents picking up where the last session left off.
+**Updated:** 2026-08-18 — data migration COMPLETE; now porting business logic
+(approval recipes) and wiring the frontend to the engine. This doc is the
+living status: what's done, what's in flight, what's remaining, and where every
+piece of the work lives.
 
-## Where everything lives
+---
+
+## 1. Where everything lives
 
 ```
 serverless-engine/
-  crates/                       # Rust workspace
-    helixdb/                    # Helix HTTP client (POST /v2/query)
-    engine/                     # core engine (Database trait, crud, graph_sync)
-    server/                     # daemon (REST/MCP/WS) + db/helix.rs adapter
-    mcp/                        # MCP tool server
-    cli/                        # `srv` CLI (MCP client)
-  tools/migrate_iico/           # migration pipeline (Python)
-    config.py                   # BOARD, batch size, GRAPH_EDGES map
-    extract.py                  # SSH + psql JSON dump (reuses local dumps)
-    transform.py                # null-strip, drop columns (KEEPS UUIDs)
-    loader.py                   # create table, bulk load, verify refs, graph sync
-    migrate.py                  # orchestrator (--migrate fast path, --batch)
-    data/raw/                   # LOCAL EXTRACTED SOURCE DATA (176 tables)
-    data/transformed/           # LOCAL TRANSFORMED DATA (175 tables) — loader input
-    SUBAGENT_WORKER.md          # per-table checklist
-    MIGRATION_STATUS.md         # live per-table status
-    MIGRATION_STRATEGY.md       # the graph-first plan
-  docs/helixdb-query-authoring.md  # graph/query contract
-  docs/blocking-client-async-runtime.md  # IMPORTANT: why blocking I/O must run on blocking threads
+  crates/
+    helixdb/                  # Helix HTTP client (POST /v2/query)
+    engine/                   # core engine (crud, auth, recipes, expr, storage traits)
+    server/                   # daemon (REST/MCP/WS) + db/helix.rs Helix adapter
+    mcp/                      # MCP tool server (agent control surface)
+    cli/                      # `srv` CLI (MCP client over HTTP)
+  deploy/
+    helix-iico-data/          # daemon SRV_DATA_DIR (object store; records live in Helix/MinIO)
+    iico/                     # the IICO frontend (git clone, own repo)
+      SUPABASE_TO_ENGINE_MIGRATION_PLAN.md   # the phase-by-phase plan (kept current)
+      src/lib/engineClient.ts                # engine auth/API facade (login, session, basePath)
+      src/integrations/supabase/client.ts    # supabase-js-shaped facade → engine REST
+      src/hooks/useAuth.tsx                  # auth state wired to engine
+      scripts/build-static.sh                # build + push to board assets
+  tools/migrate_iico/
+    CONTINUATION_GUIDE.md      # THIS FILE (living status)
+    compare_counts.py          # source vs engine row counts
+    config.py / extract.py / transform.py / loader.py / migrate.py
+    data/raw/                  # 176 local source dumps (+ _users.json, the 10 auth users)
+    data/transformed/          # loader input
+  docs/
+    blocking-client-async-runtime.md   # §8: daemon resource-bound fixes (READ THIS)
+    problems/recipe-writeback-drops-computed-fields.md  # recipe write-back saga (RESOLVED)
 ```
 
-## Current state
+---
 
-- **Board (tenant): `b_7z5lr8zaurkd0000`** — the iico HelixDB tenant.
-- **176 tables created** in the board (all source tables). Most loaded; a few
-  partial (see `MIGRATION_STATUS.md` / spot-check with counts).
-- **HelixDB** runs in Docker on port 7979 (container `helix-serverless-engine-dev`,
-  MinIO `helix-serverless-engine-dev-minio` on the `helix-serverless-engine-dev-net`
-  network). Fresh DB was reset once due to a clock-skew issue — see the note below.
-- **All source data is already extracted locally** in `tools/migrate_iico/data/raw/`
-  (the loader reads `data/transformed/`). No SSH needed to load — the network
-  dependency is gone.
+## 2. Current state (2026-08-18)
 
-## How to run the daemon (in tmux)
+- **Board:** `b_7z5lr8zaurkd0000` (HelixDB tenant). **Records: 21683 across
+  176 tables — ALL loaded & verified** (match=176, partial=0, missing=0).
+- **Real data lives in Helix/MinIO** (`helix-db` bucket, ~52M), NOT in
+  `SRV_DATA_DIR` (that only holds the object store, now
+  `deploy/helix-iico-data/objects`).
+- **Auth users:** the 10 real Supabase auth users imported (bcrypt hashes,
+  `data/raw/_users.json`). `admin@alheib.com` / `admin123` is the known admin
+  login. Engine auth fixed: `auth.me` works (was "cannot route wb_sessions get").
+- **Daemon:** runs in tmux `srv`, port 7070, data dir
+  `deploy/helix-iico-data`, `SRV_BG_*` loops OFF (idle: 0% CPU, ~14MB RSS).
+- **Frontend:** cloned at `deploy/iico/`, now **served by the engine** at
+  `http://127.0.0.1:7070/srv/b_7z5lr8zaurkd0000/` (relative-base static build,
+  index + ~271 assets pushed). Login screen renders; auth is engine-backed.
+
+---
+
+## 3. DONE (verified)
+
+### 3.1 Engine hardening (daemon no longer CPU/memory bound)
+- `table_ttl_clause` returns `None` for no-TTL tables → Helix aggregate pushdown
+  + query cache actually engage (was full O(n) scan per count).
+- `resources` count = ONE Helix aggregate (`count_records`), not 176 per-table
+  scans; `/resources` ~0.6s. Also fixed a self-deadlock (`board_of()` while
+  holding the engine Mutex).
+- Background loops (TTL sweeper/job scheduler/webhook worker) are opt-in:
+  `SRV_BG_TTL=1 / SRV_BG_JOBS=1 / SRV_BG_HOOKS=1`. WS resource ticker 60s,
+  SSE keepalive 60s.
+
+### 3.2 Auth (Phase 1)
+- 10 auth users imported with bcrypt hashes + roles (admin, center_director,
+  accountant, storekeeper, direct_manager, office_manager, gateman, teacher,
+  parent, orphan_supervisor).
+- `auth.set_role` added (REST `POST /auth/role` + MCP tool) — replaces
+  `assign_user_role`. Expires the user's sessions on role change.
+- Helix adapter `get()` routes bare-UUID keys across tenants (wb_sessions etc.)
+  so `auth.me` works.
+- Full 28-role set collected from SQL; frontend `roleConfig.ts` matches.
+
+### 3.3 Frontend serving + auth wiring
+- `vite.config.ts`: `base: "./"`, manualChunks as function (Vite 8),
+  `import.meta.dirname`.
+- `src/lib/engineClient.ts`: auth facade + `basePath()`/`goTo()` (board prefix).
+- `src/hooks/useAuth.tsx`: signIn/signOut/session-restore via engine.
+- `scripts/build-static.sh`: build + push to `PUT /api/srv/<board>/assets/`.
+- Router `basename={basePath()}` + all 15 hard `window.location.href` redirects
+  preserve `/srv/<board>`.
+- `src/integrations/supabase/client.ts`: full supabase-js-shaped facade over the
+  engine REST (query builder: eq/neq/gt/gte/lt/lte/in/ilike/like/is/not/or/
+  match/filter/contains, order/limit/range/single/maybeSingle, insert/update/
+  delete/upsert with id→seq resolution, rpc→/call, realtime poll, storage stub).
+  Build passes; CRUD verified against the live daemon.
+- Fixed pre-existing build breakers (duplicate imports in 6 files, missing
+  jspdf, Vite 8 manualChunks).
+
+### 3.4 Phase 2 — Approval state machines (11 recipes, VERIFIED)
+All defined via MCP `recipes.add`, `when: record.updated + table`, `match` on
+current stage, `$set` stage+status. One PATCH cascades through the chain.
+
+| Chain | Table | Recipes | Flow (verified) |
+|---|---|---|---|
+| Stock | inventory_transactions | stock_mgr_approve, stock_dir_approve, stock_acct_verify, stock_dispatch, stock_gate_verify, stock_complete | submitted → manager_approved → director_approved → accountant_verified → dispatched → gate_verified → completed |
+| Custody | employee_advances | custody_dir_approve, custody_acct_verify, custody_final_approve | submitted → director_approved → accountant_verified → final_approved |
+| Liquidity | liquidity_requests | liquidity_dir_approve, liquidity_final_approve | submitted → director_approved → final_approved |
+
+### 3.5 Phase 3 — Trigger derivations (partially done)
+- **`update_inventory_stock` → recipes** `stock_add_qty` (+ on restock/return)
+  and `stock_sub_qty` (− on issuance/damage/adjustment) via `$patch_other` with
+  `{{$.delta}}` substitution. Verified: 10 → 15 (restock +5) → 12 (issuance −3).
+- **`generate_tracking_number` → recipe** `gen_tracking_number` (computed
+  `tracking_number` = `concat(if(type…), randhex(8))`). Verified: ISS-/REC-/TRX-.
+- **Engine fixes that made this work** (see
+  `docs/problems/recipe-writeback-drops-computed-fields.md`):
+  - `write_node` updated-branch now emits one `set_property` per prop (data +
+    mirrors), `existing` FIRST in the batch.
+  - `record_set_raw` deep-merges the working payload into the current payload
+    (multiple create recipes accumulate instead of clobbering).
+  - expr funcs added: `substr`, `replace`, `uuid`, `randhex`.
+
+---
+
+## 4. IN PROGRESS / NEXT
+
+### Phase 3 remaining — auto-derivation triggers (recipes)
+The SQL triggers below still need recipe ports (each verified with a live test):
+
+- [x] `sync_learner_profile` — learners.full_name → profiles.full_name on
+      learner update (recipe `$patch_other`; VERIFIED).
+- [x] `auto_assign_dormitory_residents` — on learner create with `dormitory`
+      name: `$resolve_other` (name→dormitories.id, NEW engine action) +
+      `$upsert_other` → dormitory_residents (VERIFIED).
+- [x] `auto_create_library_member` — on profile insert: `$upsert_other` →
+      library_members row (VERIFIED).
+- [x] `auto_create_student_account` — on learner insert without user_id: recipe
+      auto_student_account computes `student.<admno>@sised.sc.ug`, `$create_user`
+      (NEW engine action: auth user + role student, password `Alheb@<admno>`),
+      sets learner.user_id = email. VERIFIED (student can log in).
+- [ ] `handle_new_user` / `handle_new_user_role` — profile + role defaults
+      (mostly absorbed by Phase 1 auth; verify).
+- [ ] `update_updated_at_column` — DEFERRED: needs engine `now()` string expr +
+      per-table computed setter (only board-level `records` computed exists).
+      The migrated data already carries `updated_at`; the app mostly reads it.
+      Decision: add `now()` to expr funcs + expose per-table computed (small
+      engine change) OR leave as-is (stale on write).
+- [ ] `proc_audit_log` — engine audit flag per board (off currently).
+
+### Phase 4 remaining — frontend data layer (facade exists, needs live data pass)
+- The supabase facade is built and the build passes, but the app has NOT been
+  run against real data end-to-end. Next: load the app at
+  `/srv/<board>/`, log in as admin, and click through key screens
+  (learners, attendance, approvals, inventory) — fix facade gaps as they appear
+  (RPC stubs still return "not yet ported"; storage is a stub).
+
+### Phase 5 — graph optimization (future)
+- Graph-based stock: derive quantity by traversing `RELATED_ITEM` edges instead
+  of the `inventory_stock` counter. **Blocked on:** `graph_resolve_target` needs
+  an `item_id → inventory_items` alias (currently only pluralize + user/teacher
+  → profiles). Documented as the recommended direction; deferred.
+- Port JOIN-heavy views (active_gate_passes, notify_teachers…) to traversals.
+
+---
+
+## 5. How to run / verify
 
 ```bash
+# daemon (tmux srv)
 cd /home/vox/.AAAPROJECTS/Whatsapp4Agents/serverless-engine
-tmux new -s srv            # or: tmux attach -t srv if it exists
-# inside tmux:
-SRV_DB=helix SRV_HELIX_URL=http://127.0.0.1:7979 SRV_PORT=7070 SRV_DATA_DIR=/tmp/helix-iico ./target/release/srv daemon start
-# detach with Ctrl-b d
+SRV_DB=helix SRV_HELIX_URL=http://127.0.0.1:7979 SRV_PORT=7070 \
+  SRV_DATA_DIR=deploy/helix-iico-data ./target/release/srv daemon start
+curl http://127.0.0.1:7070/healthz                 # {"ok":true}
+curl http://127.0.0.1:7070/srv/b_7z5lr8zaurkd0000/  # the app
+
+# MCP (agent control surface) — 43 tools
+curl -X POST http://127.0.0.1:7070/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# e.g. recipes.add / auth.set_role / records.query / graph.sync — full help in
+# the tool descriptions (enriched 2026-08-18).
+
+# counts vs source
+cd tools/migrate_iico && python3 compare_counts.py   # expect 176/176 match
+
+# rebuild after Rust change
+cargo build --release    # from workspace root, no -p; never cargo test/clean
 ```
 
-Check it's up: `curl http://127.0.0.1:7070/healthz` → `{"ok":true}`
+---
 
-**Rebuilding the daemon after a Rust change:**
-```bash
-cd /home/vox/.AAAPROJECTS/Whatsapp4Agents/serverless-engine
-cargo build --release        # from workspace root, no -p flags
-# then kill the old daemon and restart (Ctrl-c in the tmux window, re-run the command above)
-```
+## 6. Key engine files to touch for Phase 3/4 work
 
-## How to check the DB (the way the lead was doing it)
+| Area | File |
+|---|---|
+| Recipe dispatch/write-back | `crates/engine/src/automation.rs`, `crud.rs` (`record_set_raw`) |
+| Helix adapter (write_node/get/query) | `crates/server/src/db/helix.rs` |
+| Expr functions | `crates/engine/src/expr/funcs.rs` |
+| MCP tool specs (help text) | `crates/engine/src/registry.rs` |
+| REST auth/tables | `crates/server/src/transport/rest_auth.rs`, `rest_tables.rs` |
+| Frontend engine facade | `deploy/iico/src/lib/engineClient.ts` |
+| Frontend supabase facade | `deploy/iico/src/integrations/supabase/client.ts` |
+| Frontend auth hook | `deploy/iico/src/hooks/useAuth.tsx` |
+| Router base | `deploy/iico/src/App.tsx` |
 
-Every command below uses `SERVERLESS_DAEMON_URL=http://127.0.0.1:7070` and the
-`target/release/srv` CLI (an MCP client):
+---
 
-```bash
-export SERVERLESS_DAEMON_URL=http://127.0.0.1:7070
-B=b_7z5lr8zaurkd0000
+## 7. Known issues / gotchas
 
-# count rows in a table (engine-side aggregate)
-./target/release/srv records aggregate $B <table> count
+- **Daemon background loops are OFF** (`SRV_BG_*`). Enable per feature in Phase 6.
+- **`deploy/data`, `data_v2`, `data_backup_*` are OLD Turso-era SQLite** for
+  different boards — not the current HelixDB data. Don't use them.
+- **`inventory_stock` is a denormalized counter** — kept for now; the graph
+  derivation is the future fix.
+- **Helix clock-skew** can wipe MinIO data (see old doc) — keep local dumps.
+- **Recipes fire per table via `when.table` (top-level arg), NOT inside `when`
+  object** — the MCP `recipes.add` reads `table` from arguments.
+- **`$patch_other`/`$upsert_other` substitute `{{$.path}}`** from the triggering
+  payload; `$compute` uses expr syntax; `$set_state` sets `state` (not stage).
+- **`records.query` filter param is URL-encoded JSON** (not base64) — the facade
+  sends `encodeURIComponent(JSON.stringify(...))`.
+- **update/delete by app UUID id → resolve engine seq first** (the facade does
+  this; the REST PATCH/DELETE take numeric seq).
+- Known source orphans (assets.category_id→inventory_categories; 7
+  in_app_notifications.user_id) — verified, do NOT re-extract.
 
-# query records (node_id is the Helix node id; payload is the app data)
-./target/release/srv records query $B <table> --limit 5
+---
 
-# graph: sync *_id refs into edges (idempotent)
-./target/release/srv graph sync $B <table>
+## 8. All docs created/updated this session
 
-# graph: traverse from a node (node_id from records query)
-./target/release/srv graph traverse $B <node_id> --dir out
-
-# raw Helix check (for debugging the adapter):
-curl -s -X POST http://127.0.0.1:7979/v2/query -H 'Content-Type: application/json' \
-  -d '{"request_type":"read","query_name":"c","query":{"read":{"entries":[{"query":{"name":"c","root":{"count":{"input":{"nodes_where":{"predicate":{"eq":{"left":{"property":"$label"},"right":{"constant":{"string":"__srv__record"}}}}}}}}}}],"returns":["c"]}}}'
-```
-
-## How to migrate a table (fast path)
-
-```bash
-cd /home/vox/.AAAPROJECTS/Whatsapp4Agents/serverless-engine/tools/migrate_iico
-
-# fast clean reload from the LOCAL dump (drops table, bulk-imports, graph syncs):
-python3 migrate.py --workdir /tmp/migrate_iico --tables <t1>,<t2> --migrate --batch 100
-
-# if you want the data from the repo's data/ instead of /tmp (same content):
-# set the workdir to the repo folder:
-python3 migrate.py --workdir /home/vox/.AAAPROJECTS/Whatsapp4Agents/serverless-engine/tools/migrate_iico/data --tables <t> --migrate --batch 100
-```
-
-Notes:
-- `--migrate` DROPS the table first (clean reload), so partial data is replaced.
-- `--batch 100` is the fast bulk-import batch size (one Helix write batch per
-  request). Larger batches are fine for small tables; keep 100 for the big ones.
-- The loader reads `transformed/<t>.json`. If a transformed file is missing,
-  run once WITHOUT `--migrate` so extract+transform run (they reuse local raw).
-
-## Known bugs / where the Rust code is
-
-If something fails, here's where to look:
-
-| Symptom | File | Fix area |
-|---|---|---|
-| Daemon hangs after ~128 requests | `crates/helixdb/src/client.rs`, `crates/mcp/src/transport.rs`, `crates/server/src/transport/rest.rs`, `crates/server/src/transport/ws.rs`, `crates/server/src/jobs.rs` | Blocking reqwest client MUST run on `tokio::task::spawn_blocking`, never an async worker. See `docs/blocking-client-async-runtime.md`. |
-| `invalid query JSON` from Helix | `crates/helixdb/src/request.rs`, `crates/server/src/db/helix.rs` | Envelope shapes must match the wire format. `aggregate_by` needs a `property` even for count. `drop_edge_by_id` uses `{edges:{ids:[...]}}`. |
-| Writes silently not persisting (records "load" but count stays 0) | `crates/server/src/db/helix.rs` `write_node` | `_srv_key` collides across tables (each table's seq starts at 1) — the existing-lookup must also match the `table` prop. |
-| Bulk import fails with `unknown variant add_n` | `crates/server/src/db/helix.rs` `bulk_insert` | Batch entries must be `{query:{name,root}}` via `request::entry`, not raw `add_n`. |
-| `active_text_mutation_limit_exceeded` (512) | `crates/server/src/db/helix.rs` | Once a text index exists, `_search` writes count as mutations. Gated by `is_text_indexed`. Don't create the FTS index during bulk migration. |
-| Graph sync creates 0 edges | `crates/engine/src/engine.rs` `graph_resolve_target` | Target-table discovery: `pluralize()` + `user`/`teacher`→`profiles` aliases. Refs resolve by `$.id` (UUID), then `$.seq`. |
-| SSH timeout during extract | `tools/migrate_iico/extract.py` | `SSH_TIMEOUT` is 300s now. Big tables (audit_log 134k) need it. |
-| Helix container clock skew (`RequestTimeTooSkewed` / `invalid clock tick`) | Docker ops | The Helix→MinIO SlateDB requires monotonic ticks. If it breaks: stop helix+minio, `docker exec minio rm -rf /data/helix-db`, recreate the bucket dir, restart both. DATA IS LOST on the Helix side — re-run the loader from local dumps (that's why we keep the data locally). |
-
-**Critical rule:** never call `cargo clean`, never `cargo test` (the user runs
-tests), and never touch `target/`. Build with plain `cargo check` /
-`cargo build --release` from the workspace root.
-
-## The graph model (what the migration produces)
-
-- Every record = one Helix node under the `__srv__record` label, with
-  `tenantId = b_7z5lr8zaurkd0000`, `table` prop, `seq`, `_srv_key`, `data`
-  (full engine JSON), `_node_id` (the Helix node id, exposed in payloads).
-- `*_id` payload fields (source UUIDs) become `RELATED_<FIELD>` edges via
-  `srv graph sync <board> <table>` — idempotent, run after every load.
-- `profiles`/`learners`/`classes`/`subjects`/`guardians` are the core entities
-  and are already migrated + verified.
-
-## To finish the migration
-
-1. Load the remaining partial tables: compare source counts (from
-   `data/raw/*.json` row counts) vs engine counts, then `--migrate` the ones
-   that differ. See `MIGRATION_STATUS.md`.
-2. Run `graph sync` on every table with `*_id` refs (the loader does this
-   automatically after each load; re-run idempotently).
-3. Verify: `records aggregate <board> <t> count` == local `len(data/raw/<t>.json)`
-   for every non-empty table.
-4. Update `MIGRATION_STATUS.md` per table.
-
-## Known source-data orphans (verified against raw dumps, 2026-08-18)
-
-These `*_id` refs exist in the source data but point at rows that are absent
-from every local dump (deleted source rows). The loader's `verify_references`
-step will fail on them; the load itself is complete and correct, and `graph
-sync` skips them safely. Do NOT re-extract to "fix" these — they are gone from
-the source DB.
-
-- `assets.category_id` → **12 refs** point at `inventory_categories`, not
-  `asset_categories`. `GRAPH_EDGES` in `config.py` was corrected
-  (`assets.category_id → inventory_categories`). The 12 ids all exist there.
-- `in_app_notifications.user_id` → **7 orphans** not in `profiles`:
-  `00572519-77c3-4afa-b45d-afe41067b276`, `3092ced9-b2b7-4f3f-a82a-90c9e1b10eb0`,
-  `479717c6-f00f-4a6b-b785-5467d0b62eb8`, `6557cc87-dbde-45ef-b020-f75d3e2fbad7`,
-  `86059752-c59b-4312-b180-9bb2ece6d23a`, `961ee724-6e85-49ad-983b-31c2ece94039`,
-  `9a13a5ca-e151-44b7-84a4-c69bd3ce4fcb`.
-  If a future verify run fails on these, pass the table through
-  `loader.py data __sync__<table>` directly (verify is source-truth only;
-  sync is what materializes edges).
+| Doc | Purpose |
+|---|---|
+| `docs/problems/recipe-writeback-drops-computed-fields.md` | The recipe write-back bug saga: root causes + fixes + graph future |
+| `docs/blocking-client-async-runtime.md` §8 | Resource-bound daemon paths found + fixed (keep §1-7) |
+| `deploy/iico/SUPABASE_TO_ENGINE_MIGRATION_PLAN.md` | The phase-by-phase plan, kept current |
+| `deploy/iico/scripts/P4_OPCODE_TASK.md` | The opencode task that built the supabase facade |
+| `tools/migrate_iico/compare_counts.py` | source-vs-engine count checker |
+| `this file` | the living continuation guide |

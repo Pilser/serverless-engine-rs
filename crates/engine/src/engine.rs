@@ -1,6 +1,6 @@
 use crate::model::{Board, KeyRecord, Principal, Recipe, Record, Secret};
 use crate::storage::database::{Database, DatabaseCaps};
-use crate::storage::ir::{Agg, SrvFilter};
+use crate::storage::ir::{scalar_text, Agg, SrvFilter};
 use crate::storage::object_store::ObjectStore;
 use serde_json::{json, Value as Json};
 use std::sync::Arc;
@@ -107,6 +107,10 @@ impl ServerlessEngine {
         let records = self.list_records(board, table, 1000, None, 0)?;
         let mut created: Vec<serde_json::Value> = Vec::new();
         let mut skipped = 0usize;
+        // Memoize (target_table, ref_value) -> target node id so repeated refs
+        // (e.g. many learners -> same class) resolve once, not per record.
+        let mut target_cache: std::collections::HashMap<(String, String), Option<i64>> =
+            std::collections::HashMap::new();
         for rec in &records {
             let Some(from) = rec.payload.get("_node_id").and_then(|v| v.as_i64()) else {
                 continue;
@@ -119,62 +123,34 @@ impl ServerlessEngine {
                 if field == "_node_id" || target_table.is_empty() {
                     continue;
                 }
-                let Some(seq) = value.as_i64().or_else(|| value.as_str().and_then(|s| s.parse().ok())) else {
-                    continue;
+                let ref_value = value.clone();
+                let cache_key = (target_table.to_string(), scalar_text(&ref_value));
+                let target_node = if let Some(cached) = target_cache.get(&cache_key) {
+                    *cached
+                } else {
+                    // A resolution error (e.g. transient) counts as unresolved;
+                    // re-runs retry it.
+                    let resolved = self.graph_resolve_target(board, table, target_table, &ref_value).unwrap_or(None);
+                    target_cache.insert(cache_key, resolved);
+                    resolved
                 };
-                // Resolve the target table: try exact, singular, plural.
-                let candidates = [target_table.to_string(), format!("{target_table}s")];
-                let mut target_node = None;
-                for t in &candidates {
-                    if t == table {
-                        continue; // skip self-table refs (would be self-loops)
-                    }
-                    let q = crate::storage::database::Query {
-                        filter: crate::storage::ir::SrvFilter {
-                            conds: vec![
-                                crate::crud::board_cond(board),
-                                crate::crud::table_cond(t),
-                                crate::storage::ir::FilterCond {
-                                    field: "$.seq".to_string(),
-                                    op: crate::storage::ir::Op::Eq,
-                                    value: serde_json::Value::from(seq),
-                                },
-                            ],
-                        },
-                        orders: vec![],
-                        limit: 1,
-                        offset: 0,
-                        ttl: None,
-                    };
-                    let rows = self.db.query("wb_records", &q)?.rows;
-                    if let Some(row) = rows.first() {
-                        let id = row
-                            .data
-                            .get("payload")
-                            .and_then(|p| p.get("_node_id"))
-                            .or_else(|| row.data.get("_node_id"))
-                            .and_then(|v| v.as_i64());
-                        if let Some(id) = id {
-                            target_node = Some(id);
-                            break;
-                        }
-                    }
-                }
                 let Some(to) = target_node else {
                     skipped += 1;
                     continue;
                 };
                 let label = format!("RELATED_{}", target_table.to_uppercase());
-                // Idempotency: skip if an edge already exists from->to with this label.
-                let existing = self.db.traverse(board, from, Some(&label), "out", 1)?.rows;
-                if existing.iter().any(|r| match &r.key {
-                    crate::model::Key::Int(v) => *v == to,
-                    crate::model::Key::Text(s) => s.parse::<i64>().map(|v| v == to).unwrap_or(false),
-                }) {
-                    skipped += 1;
-                    continue;
-                }
-                let edge = self.db.link(board, from, &label, to, &serde_json::json!({}))?;
+                // Per-ref resilience: a single bad ref (malformed value, node
+                // already gone, transient error) must not abort the whole sync.
+                // Skip and report it; the sync is idempotent so a re-run fixes
+                // anything skipped.
+                let edge = match self.db.link(board, from, &label, to, &serde_json::json!({})) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        skipped += 1;
+                        let _ = e;
+                        continue;
+                    }
+                };
                 created.push(serde_json::json!({
                     "from": from, "label": label, "to": to, "edge": edge,
                     "field": field, "target_table": target_table,
@@ -187,6 +163,66 @@ impl ServerlessEngine {
             "skipped": skipped,
             "edges": created,
         }))
+    }
+
+    /// Resolve a `*_id` ref value to a target table's node id. `*_id` refs are
+    /// source UUIDs matching the target's payload `id`; numeric refs match
+    /// `$.seq`. Tries exact + plural table names. Returns `Ok(None)` when the
+    /// target doesn't exist.
+    fn graph_resolve_target(
+        &self,
+        board: &str,
+        source_table: &str,
+        target_table: &str,
+        ref_value: &Json,
+    ) -> anyhow::Result<Option<i64>> {
+        let candidates = [target_table.to_string(), format!("{target_table}s")];
+        for t in &candidates {
+            if t == source_table {
+                continue; // skip self-table refs (would be self-loops)
+            }
+            let mut lookups = Vec::new();
+            if ref_value.is_string() {
+                lookups.push(serde_json::json!({
+                    "field": "$.id", "op": "eq", "value": ref_value.clone()
+                }));
+            }
+            if let Some(n) = ref_value.as_i64() {
+                lookups.push(serde_json::json!({
+                    "field": "$.seq", "op": "eq", "value": serde_json::Value::from(n)
+                }));
+            }
+            for lu in lookups {
+                let field = lu["field"].as_str().unwrap_or("$.id").to_string();
+                let val = lu["value"].clone();
+                let q = crate::storage::database::Query {
+                    filter: crate::storage::ir::SrvFilter {
+                        conds: vec![
+                            crate::crud::board_cond(board),
+                            crate::crud::table_cond(t),
+                            crate::storage::ir::FilterCond { field, op: crate::storage::ir::Op::Eq, value: val },
+                        ],
+                    },
+                    orders: vec![],
+                    limit: 1,
+                    offset: 0,
+                    ttl: None,
+                };
+                let rows = self.db.query("wb_records", &q)?.rows;
+                if let Some(row) = rows.first() {
+                    let id = row
+                        .data
+                        .get("payload")
+                        .and_then(|p| p.get("_node_id"))
+                        .or_else(|| row.data.get("_node_id"))
+                        .and_then(|v| v.as_i64());
+                    if let Some(id) = id {
+                        return Ok(Some(id));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn object_store(&self) -> &dyn ObjectStore {

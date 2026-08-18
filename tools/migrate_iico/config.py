@@ -20,13 +20,14 @@ SRC_DB_NAME = _env("IICO_DB_NAME", "postgres")
 
 # ---- destination: the serverless engine ------------------------------------
 ENGINE_BASE = _env("ENGINE_BASE", "http://127.0.0.1:7070")
-# Fresh board (HelixDB tenant) for the graph-first migration. The old turso-era
-# board b_v2qyx0enpqkd0000 is obsolete. Set to the board created at migration start.
-BOARD = _env("BOARD", "")
+# Fresh board (HelixDB tenant) for the graph-first migration.
+BOARD = _env("BOARD", "b_8se1o3ansrkd0000")
 OWNER_TOKEN = _env("OWNER_TOKEN", BOARD)  # board id bearer = owner role
 
 # ---- migration behaviour ----------------------------------------------------
-BATCH_SIZE = int(_env("MIGRATE_BATCH_SIZE", "100"))
+# Bulk batches are transaction-wrapped in the engine; Helix write transactions
+# cap out around 20-30 conditional writes per request, so keep batches small.
+BATCH_SIZE = int(_env("MIGRATE_BATCH_SIZE", "20"))
 SKIP_EXISTING_USERS = _env("SKIP_EXISTING_USERS", "1") == "1"
 
 # ---- graph edge map ---------------------------------------------------------

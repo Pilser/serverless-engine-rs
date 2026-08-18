@@ -19,7 +19,7 @@ use helixdb::request;
 use helixdb::tenant::Tenant;
 use helixdb::Client;
 use serde_json::{json, Value as Json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 const DATA_PROP: &str = "data";
@@ -311,6 +311,13 @@ fn routing_props(data: &Json) -> Vec<(String, Json)> {
 pub struct HelixDatabase {
     client: Client,
     _boards: Mutex<HashMap<String, Tenant>>,
+    /// Text index state per (tenant,label): once a BM25 text index exists for a
+    /// label, `_search` prop writes count as text-index mutations (Helix caps
+    /// active text mutations at 512 entities). During bulk loads the index may
+    /// not exist yet — in that case `_search` writes are skipped so bulk
+    /// inserts don't hit the cap; search falls back to the Rust scan until the
+    /// index is built.
+    text_indexed: Mutex<HashSet<(String, String)>>,
 }
 
 impl HelixDatabase {
@@ -318,7 +325,34 @@ impl HelixDatabase {
         Ok(Self {
             client: Client::new(base_url)?,
             _boards: Mutex::new(HashMap::new()),
+            text_indexed: Mutex::new(HashSet::new()),
         })
+    }
+
+    /// Whether the BM25 text index exists for (tenant, label). Cached once
+    /// observed; the index is created lazily by `ensure_text_index` on first
+    /// search, and once present `_search` writes resume.
+    fn is_text_indexed(&self, tenant: &str, label: &str) -> bool {
+        let key = (tenant.to_string(), label.to_string());
+        if self.text_indexed.lock().unwrap().contains(&key) {
+            return true;
+        }
+        // Probe: a text_search_nodes query succeeds iff the index exists.
+        let root = json!({
+            "text_search_nodes": {
+                "label": label,
+                "property": SEARCH_PROP,
+                "tenant_value": { "value": { "string": tenant } },
+                "query_text": { "value": { "string": "probe" } },
+                "k": { "literal": 1 }
+            }
+        });
+        let batch = request::read_batch(vec![request::entry("h", root)], vec!["h"]);
+        let ok = self.client.post("read", "index_probe", batch).is_ok();
+        if ok {
+            self.text_indexed.lock().unwrap().insert(key);
+        }
+        ok
     }
 
     fn tenant(&self, board_id: &str) -> Tenant {
@@ -348,12 +382,14 @@ impl HelixDatabase {
             .into_iter()
             .map(|(f, d)| (helix_prop_order(&f).unwrap_or(&f).to_string(), d))
             .collect();
-        // When any order field is not pushable, pagination must happen in Rust
-        // (the Helix limit/offset would slice before the Rust sort).
-        let (helix_limit, helix_offset) = if rust_orders.is_empty() {
-            (limit, offset)
-        } else {
+        // When any order field is not pushable OR there are Rust-side (rest)
+        // filter conditions, the Helix limit/offset would slice before the
+        // Rust filter/sort — so fetch unbounded and paginate in Rust.
+        let needs_rust_slice = !rust_orders.is_empty() || !rest.is_empty();
+        let (helix_limit, helix_offset) = if needs_rust_slice {
             (usize::MAX, 0)
+        } else {
+            (limit, offset)
         };
         let shaped = request::order_and_page(src, &pushable, helix_limit, helix_offset);
         let root = request::value_map(shaped, vec!["$id", DATA_PROP, helixdb::row::KEY_PROP]);
@@ -388,8 +424,15 @@ impl HelixDatabase {
         for (k, v) in routing_props(&row.data) {
             props.push((k, v));
         }
-        if label == engine_label("wb_records") {
+        if label == engine_label("wb_records") && self.is_text_indexed(tenant, label) {
             props.push((SEARCH_PROP.to_string(), json!(search_text(&row.data))));
+            for (k, v) in numeric_mirror_props(&row.data) {
+                props.push((k, v));
+            }
+        } else if label == engine_label("wb_records") {
+            // No text index yet (bulk load): numeric mirrors still help
+            // aggregates; skip `_search` so writes don't hit Helix's text
+            // mutation cap. Search falls back to the Rust scan.
             for (k, v) in numeric_mirror_props(&row.data) {
                 props.push((k, v));
             }
@@ -400,20 +443,29 @@ impl HelixDatabase {
         };
         props.push((helixdb::row::KEY_PROP.to_string(), keyval_scalar));
 
-        // Existing node lookup by _srv_key (exact).
+        // Existing node lookup by _srv_key (exact). Records share `_srv_key`
+        // numbering across tables (each table's seq starts at 1), so the
+        // lookup MUST also match the `table` prop to avoid colliding with a
+        // same-seq node in another table.
         let keyval = match &row.key {
             Key::Int(v) => json!({ "i64": v }),
             Key::Text(s) => json!({ "string": s }),
         };
+        let mut existing_preds = vec![
+            json!({ "eq": { "left": { "property": "$label" }, "right": { "constant": { "string": label } } } }),
+            json!({ "eq": { "left": { "property": helixdb::tenant::TENANT_PROP }, "right": { "constant": { "string": tenant } } } }),
+            json!({ "eq": { "left": { "property": helixdb::row::KEY_PROP }, "right": { "constant": keyval } } }),
+        ];
+        if label == engine_label("wb_records") {
+            if let Some(t) = row.data.get("table").and_then(|v| v.as_str()) {
+                existing_preds.push(
+                    json!({ "eq": { "left": { "property": TABLE_PROP }, "right": { "constant": { "string": t } } } }),
+                );
+            }
+        }
         let existing = json!({
             "query": { "name": "existing", "root": {
-                "nodes_where": { "predicate": {
-                    "and": { "predicates": [
-                        { "eq": { "left": { "property": "$label" }, "right": { "constant": { "string": label } } } },
-                        { "eq": { "left": { "property": helixdb::tenant::TENANT_PROP }, "right": { "constant": { "string": tenant } } } },
-                        { "eq": { "left": { "property": helixdb::row::KEY_PROP }, "right": { "constant": keyval } } }
-                    ]}
-                }}
+                "nodes_where": { "predicate": { "and": { "predicates": existing_preds } } }
             }}
         });
         // New node (only when no existing).
@@ -422,11 +474,13 @@ impl HelixDatabase {
                 "root": request::add_n(label, tenant, &props) }
         });
         // Update the existing node's data (only when existing present). For
-        // records, also refresh the `_search` blob + numeric mirrors.
+        // records, also refresh `_search` (only when indexed) + numeric mirrors.
         let updated_input = json!({ "nodes": { "reference": { "var": "existing" } } });
         let mut updated = request::set_property(updated_input.clone(), DATA_PROP, &row.data);
         if label == engine_label("wb_records") {
-            updated = request::set_property(updated_input.clone(), SEARCH_PROP, &json!(search_text(&row.data)));
+            if self.is_text_indexed(tenant, label) {
+                updated = request::set_property(updated_input.clone(), SEARCH_PROP, &json!(search_text(&row.data)));
+            }
             for (k, v) in numeric_mirror_props(&row.data) {
                 updated = request::set_property(updated_input.clone(), &k, &v);
             }
@@ -623,7 +677,11 @@ impl Database for HelixDatabase {
                         .cloned()
                         .collect();
                     match self.search_rows(tenant.as_str(), &label, &query_text, q.limit, q.offset, &extra) {
-                        Ok(cursor) => return Ok(cursor),
+                        Ok(cursor) => {
+                            // Index is live: future record writes include _search.
+                            self.text_indexed.lock().unwrap().insert((tenant.as_str().to_string(), label.clone()));
+                            return Ok(cursor);
+                        }
                         // Index not built yet (or not yet searchable): fall
                         // back to the Rust scan path so search still works.
                         Err(_) => {}
@@ -635,7 +693,7 @@ impl Database for HelixDatabase {
             .filter
             .conds
             .iter()
-            .filter(|c| c.field != "$.board_id" && c.field != "$.table")
+            .filter(|c| c.field != "$.board_id")
             .cloned()
             .collect();
         // Records default to seq DESC (mirrors turso and the engine's

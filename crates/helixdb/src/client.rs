@@ -35,14 +35,35 @@ impl Client {
     }
 
     /// Send an envelope built by the request module. Returns the parsed
-    /// response object: `{ name: [rows...] }`.
+    /// response object: `{ name: [rows...] }`. Retries transient transport
+    /// errors (connection drops under sustained load) up to 3 times.
     pub fn execute(&self, envelope: Json) -> Result<Response> {
         let url = format!("{}/v2/query", self.base);
+        let mut last_err: Option<Error> = None;
+        for attempt in 0..3 {
+            match self.try_execute(&url, &envelope) {
+                Ok(r) => return Ok(r),
+                Err(e) => {
+                    // Only retry transport-level failures; HTTP status errors
+                    // (e.g. index_not_found) are deterministic.
+                    let retryable = matches!(e, Error::Http(_));
+                    last_err = Some(e);
+                    if !retryable {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1)));
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::Other("request failed".into())))
+    }
+
+    fn try_execute(&self, url: &str, envelope: &Json) -> Result<Response> {
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .timeout(std::time::Duration::from_millis(self.timeout_ms))
-            .json(&envelope)
+            .json(envelope)
             .send()
             .map_err(Error::Http)?;
         let status = resp.status();

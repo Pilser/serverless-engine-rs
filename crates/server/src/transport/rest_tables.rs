@@ -230,7 +230,7 @@ pub fn list_records(
     let before: Option<i64> = params.get("before").and_then(|b| b.parse().ok());
     match server.engine.lock().unwrap().list_records(board, table, limit, before, offset) {
         Ok(rs) => ok_json(json!({ "ok": true, "records": records_json(&rs) })),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => table_err(table, e),
     }
 }
 
@@ -287,8 +287,18 @@ pub fn query_records(
         let sf = SrvFilter { conds };
         match engine.query_records(board, table, &sf, &orders, limit, offset) {
             Ok(rs) => ok_json(json!({ "ok": true, "records": records_json(&rs) })),
-            Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Err(e) => table_err(table, e),
         }
+    }
+}
+
+/// Map engine errors: missing table -> 404 (so clients can treat it as an
+/// empty result); everything else -> 500.
+fn table_err(table: &str, e: anyhow::Error) -> Response<BoxBodyResp> {
+    if e.to_string().contains(&format!("table '{table}' does not exist")) {
+        err_json(StatusCode::NOT_FOUND, &format!("table '{table}' does not exist"))
+    } else {
+        err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
     }
 }
 
@@ -317,7 +327,7 @@ pub fn aggregate_records(
     };
     match server.engine.lock().unwrap().aggregate_records(board, table, &filter, agg, field, group) {
         Ok(res) => ok_json(json!({ "ok": true, "aggregate": res })),
-        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => table_err(table, e),
     }
 }
 

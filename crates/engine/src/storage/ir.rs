@@ -12,6 +12,7 @@ pub enum Op {
     NotContains,
     In,
     Search,
+    IsNull,
 }
 
 impl Op {
@@ -27,8 +28,9 @@ impl Op {
             "not_contains" => Ok(Op::NotContains),
             "in" => Ok(Op::In),
             "search" => Ok(Op::Search),
+            "is" => Ok(Op::IsNull),
             other => anyhow::bail!(
-                "unknown filter operator '{other}' (eq, neq, gt, gte, lt, lte, contains, not_contains, in, search)"
+                "unknown filter operator '{other}' (eq, neq, gt, gte, lt, lte, contains, not_contains, in, search, is)"
             ),
         }
     }
@@ -45,6 +47,7 @@ impl Op {
             Op::NotContains => "not_contains",
             Op::In => "in",
             Op::Search => "search",
+            Op::IsNull => "is",
         }
     }
 }
@@ -203,7 +206,12 @@ fn push_ops(conds: &mut Vec<FilterCond>, field: &str, ops: &JVal) -> anyhow::Res
             }
         }
         other => {
-            conds.push(FilterCond { field, op: Op::Eq, value: other.clone() });
+            if other.is_null() {
+                // {"field": null} means "is null" (supabase-js .is("f", null)).
+                conds.push(FilterCond { field, op: Op::IsNull, value: JVal::Null });
+            } else {
+                conds.push(FilterCond { field, op: Op::Eq, value: other.clone() });
+            }
         }
     }
     Ok(())
@@ -343,6 +351,15 @@ fn cond_matches(c: &FilterCond, payload: &JVal) -> bool {
             .map(|arr| arr.iter().any(|x| loose_eq(&actual, x)))
             .unwrap_or(false),
         Op::Search => crate::expr::search_match(payload, &scalar_text(&c.value)),
+        Op::IsNull => {
+            let want_null = match &c.value {
+                JVal::Null => true,
+                JVal::Object(o) => o.get("not").map(|v| v.is_null()).unwrap_or(false),
+                _ => false,
+            };
+            let is_null = actual.is_null();
+            is_null == want_null
+        }
     }
 }
 

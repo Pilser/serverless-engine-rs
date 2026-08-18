@@ -251,6 +251,11 @@ fn rest_matches(c: &FilterCond, row: &Row) -> bool {
         Op::Contains => text.to_lowercase().contains(&want.to_lowercase()),
         Op::NotContains => !text.to_lowercase().contains(&want.to_lowercase()),
         Op::Search => engine::expr::search_match(&row.data, &want),
+        Op::IsNull => {
+            let want_null = c.value.is_null()
+                || c.value.as_object().and_then(|o| o.get("not")).map(|v| v.is_null()).unwrap_or(false);
+            actual.is_null() == want_null
+        }
     }
 }
 

@@ -558,6 +558,35 @@ fn apply_action(
             let patch = subst_patch(patch.clone(), payload)?;
             crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(&filter)?, &patch)?;
         }
+        // "$resolve_other": look up one row in another table by a filter and
+        // copy a field of it into the working payload. Used to resolve
+        // name->id mappings in recipes, e.g. learner.dormitory (name) ->
+        // dormitory_residents.dormitory_id (uuid).
+        //   {"$resolve_other":{"table":"dormitories","filter":{"name":"{{$.dormitory}}"},"field":"id","into":"$.dormitory_id"}}
+        "$resolve_other" => {
+            let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$resolve_other must be an object"))?;
+            let tbl = obj.get("table").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("$resolve_other needs \"table\""))?;
+            let filter = obj.get("filter").ok_or_else(|| anyhow::anyhow!("$resolve_other needs \"filter\""))?;
+            let field = obj.get("field").and_then(|v| v.as_str()).unwrap_or("id");
+            let into = obj.get("into").and_then(|v| v.as_str()).unwrap_or("$.resolved_id");
+            let filter = subst_patch(filter.clone(), payload)?;
+            let rows = crate::crud::scan_rows(db, board_id, tbl)?;
+            let mut found = None;
+            if let Ok(sf) = crate::storage::ir::parse_filter(&filter) {
+                for row in rows {
+                    let rec: crate::model::Record = serde_json::from_value(row.data)?;
+                    if sf.matches(&rec.payload) {
+                        found = Some(rec.payload.get(field).cloned().unwrap_or(Json::Null));
+                        break;
+                    }
+                }
+            }
+            if let Some(v) = found {
+                set_at(payload, into, v)?;
+            } else {
+                logs.push(format!("$resolve_other: no row in {tbl} matched {filter}"));
+            }
+        }
         "$transaction" => {
             let steps = val.as_array().ok_or_else(|| anyhow::anyhow!("$transaction must be an array"))?;
             for step in steps {

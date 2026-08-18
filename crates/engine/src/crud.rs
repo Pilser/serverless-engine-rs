@@ -94,7 +94,7 @@ fn exact_filter(board_id: &str, table: &str, seq: i64) -> SrvFilter {
     }
 }
 
-fn scan_rows(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<Vec<Row>> {
+pub(crate) fn scan_rows(db: &dyn Database, board_id: &str, table: &str) -> anyhow::Result<Vec<Row>> {
     let q = Query {
         filter: SrvFilter { conds: vec![board_cond(board_id), table_cond(table)] },
         orders: vec![],

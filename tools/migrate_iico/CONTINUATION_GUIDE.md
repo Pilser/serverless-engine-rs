@@ -157,13 +157,23 @@ The SQL triggers below still need recipe ports (each verified with a live test):
 - [x] RPCs mapped to engine ops: advance_*_request -> PATCH stage (recipes
       cascade), assign_user_role -> /auth/role, create_asset -> insert,
       delete_* -> delete. Unknown RPCs -> "not yet ported".
-- [ ] Still stubbed: storage (upload/download/remove) returns "not yet ported";
-      the app's file upload screens (documents, signatures) won't work yet.
-- [ ] Gotcha: the engine serves assets with cache-control max-age=3600, so after
-      a rebuild the browser keeps old chunk hashes for up to an hour. Use a
-      fresh browser session (agent-browser close --all + reopen) to verify, or
-      bump asset versions. Old chunks accumulate in the board assets (the
-      build-static.sh pushes but never deletes).
+- [x] Fixed browser-reported 404/500s + MIME blocks:
+  - `is` null operator added to the engine (`{"field":{"is":null}}` and
+    `{"field":null}` now match nulls) — fixes the term_results 400.
+  - Missing tables return 404 (not 500); the facade treats 404 as an empty
+    result — fixes homework/site_settings 500s.
+  - Storage (upload/download/getPublicUrl) wired to the engine files REST;
+    /file resolves downloads by record name; bucket tables created.
+  - index.html serves no-cache; build-static.sh clears stale assets (kills
+    the old-chunk MIME-block / stale-JS issues).
+  - PageGuide conditional hooks fixed (React #310 crash after login).
+  - Verified in Chrome: boss login -> dashboard -> Learners & Classes with
+    0 console errors (no MIME blocks, no 404/500 XHRs).
+- [ ] Known latency: login ~2.5s (bcrypt verify on cost-10 hashes + Helix
+      round-trips). The app's Sign In button can appear stuck-disabled until
+      it resolves. Investigate bcrypt cost / caching if it bothers users.
+- [ ] Still stubbed: storage.remove; some RPCs (get_tailor_stats,
+      tailor_materials_cost, etc.) return "not yet ported".
 
 ### Phase 5 — graph optimization (future)
 - Graph-based stock: derive quantity by traversing `RELATED_ITEM` edges instead

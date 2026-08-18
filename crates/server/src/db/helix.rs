@@ -484,23 +484,45 @@ impl HelixDatabase {
         });
         // Update the existing node's data (only when existing present). For
         // records, also refresh `_search` (only when indexed) + numeric mirrors.
+        // Chaining set_property outputs is NOT reliable inside a conditional
+        // var context, so emit ONE set_property per prop — each keyed on the
+        // same `var: existing` input — as separate queries in the batch.
         let updated_input = json!({ "nodes": { "reference": { "var": "existing" } } });
-        let mut updated = request::set_property(updated_input.clone(), DATA_PROP, &row.data);
+        let mut updated_roots = vec![request::set_property(updated_input.clone(), DATA_PROP, &row.data)];
         if label == engine_label("wb_records") {
             if self.is_text_indexed(tenant, label) {
-                updated = request::set_property(updated_input.clone(), SEARCH_PROP, &json!(search_text(&row.data)));
+                updated_roots.push(request::set_property(updated_input.clone(), SEARCH_PROP, &json!(search_text(&row.data))));
             }
             for (k, v) in numeric_mirror_props(&row.data) {
-                updated = request::set_property(updated_input.clone(), &k, &v);
+                updated_roots.push(request::set_property(updated_input.clone(), &k, &v));
             }
         }
-        let updated = json!({
-            "query": { "name": "updated", "condition": { "var_not_empty": "existing" },
-                "root": updated }
-        });
-        let batch = request::write_batch(vec![existing, created, updated], vec!["created", "updated"]);
+        let mut updated_queries: Vec<Json> = updated_roots
+            .iter()
+            .enumerate()
+            .map(|(i, root)| {
+                json!({
+                    "query": { "name": format!("updated{i}"), "condition": { "var_not_empty": "existing" }, "root": root }
+                })
+            })
+            .collect();
+        let updated_names: Vec<String> = (0..updated_queries.len()).map(|i| format!("updated{i}")).collect();
+        let mut batch_entries = vec![existing];
+        batch_entries.append(&mut updated_queries);
+        batch_entries.push(created);
+        let returns_refs: Vec<String> = updated_names.clone();
+        let returns: Vec<&str> = returns_refs.iter().map(|s| s.as_str()).collect();
+        let batch = request::write_batch(batch_entries, returns);
         let resp = self.client.post("write", "write_node", batch)?;
         let created = resp.get("created").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        let updated_n = updated_names.iter().filter(|n| resp.get(n.as_str()).and_then(|v| v.as_array()).map(|a| !a.is_empty()).unwrap_or(false)).count();
+        if created > 0 || updated_n > 0 {
+            let k = match &row.key {
+                Key::Int(v) => json!(*v),
+                Key::Text(s) => json!(s),
+            };
+            eprintln!("[write_node] {label} key={k} created={created} updated={updated_n}");
+        }
         let _ = created;
         Ok(0)
     }

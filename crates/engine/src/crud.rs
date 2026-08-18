@@ -685,10 +685,38 @@ pub fn record_set_raw(
     let current = find_record(db, board_id, table, seq)?
         .ok_or_else(|| anyhow::anyhow!("record seq {seq} does not exist"))?;
     let created_at = current.created_at.unwrap_or_default();
-    let stored = stored_record_json(board_id, table, seq, &payload, &created_at, None);
-    db.delete(TABLE_RECORDS, &exact_filter(board_id, table, seq))?;
+    // DEEP-MERGE the recipe's working payload into the CURRENT payload instead
+    // of replacing it: multiple create recipes each write back the whole
+    // payload, and the last one must not clobber the earlier recipes' fields
+    // (e.g. gen_tracking_number sets tracking_number, then a stock recipe's
+    // write-back would otherwise restore a payload without it).
+    let mut merged = current.payload.clone();
+    deep_merge_json(&mut merged, &payload);
+    let stored = stored_record_json(board_id, table, seq, &merged, &created_at, None);
+    // Upsert in place by seq: the Helix adapter's write_node is an idempotent
+    // add-or-update on `_srv_key`+`table`, so a plain insert refreshes the
+    // node's data (including mirrors) without a delete that could race with
+    // the just-completed insert during a create-triggered recipe write-back.
     db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored))?;
     Ok(())
+}
+
+/// Recursively merge `patch` into `base` (objects merge by key; other values
+/// are overwritten). Used so recipe write-backs accumulate instead of replace.
+pub fn deep_merge_json(base: &mut Json, patch: &Json) {
+    match (base, patch) {
+        (Json::Object(b), Json::Object(p)) => {
+            for (k, v) in p {
+                match b.get_mut(k) {
+                    Some(existing) => deep_merge_json(existing, v),
+                    None => {
+                        b.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (b, p) => *b = p.clone(),
+    }
 }
 
 pub fn record_patch_first_raw(

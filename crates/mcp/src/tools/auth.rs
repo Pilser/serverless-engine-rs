@@ -46,3 +46,17 @@ pub fn me(
         None => Err("invalid or expired session".to_string()),
     }
 }
+
+pub fn set_role(
+    engine: &mut ServerlessEngine,
+    principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let email = arg_str(arguments, "email")?;
+    let role = arg_str(arguments, "role")?;
+    let user = engine
+        .set_user_role(&board, &email, &role, principal)
+        .map_err(|e| e.to_string())?;
+    ok(json!({ "user": user }))
+}

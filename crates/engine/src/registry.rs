@@ -992,6 +992,31 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "auth".into(),
+        verb: "set_role".into(),
+        summary: "Change a user's role (admin/owner only).".into(),
+        description: "Sets the user's role to the given value and expires their sessions so stale tokens drop the old role. The engine equivalent of Supabase's `assign_user_role` / the app's /api/auth/update-role.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "email".into(), r#type: ArgType::Str, required: true, help: "The user's email.".into() },
+            ArgSpec { name: "role".into(), r#type: ArgType::Str, required: true, help: "The new role (e.g. admin, teacher, accountant).".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "role": "teacher" } }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "auth set_role b_abc teacher@alheib.test accountant".into(),
+            description: "Promote a teacher to accountant.".into(),
+            response: serde_json::json!({ "ok": true, "user": { "email": "teacher@alheib.test", "role": "accountant" } }),
+        }],
+        see_also: vec!["auth.signup".into(), "users.list".into()],
+        danger_notes: Some("Expires the user's active sessions.".into()),
+    });
+
+    specs.push(CommandSpec {
         group: "users".into(),
         verb: "list".into(),
         summary: "List a board's users (email, role, created_at).".into(),

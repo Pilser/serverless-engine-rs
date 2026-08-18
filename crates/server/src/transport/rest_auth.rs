@@ -78,3 +78,23 @@ pub fn me(server: &Server, board: &str, token: Option<&str>) -> Response<BoxBody
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
     }
 }
+
+/// POST /api/srv/<board>/auth/role — change a user's role (admin/owner only).
+pub fn set_role(server: &Server, board: &str, principal: &engine::Principal, body: &Bytes) -> Response<BoxBodyResp> {
+    if !crate::transport::rest::require_admin(principal) {
+        return err_json(StatusCode::FORBIDDEN, "admin authorization required");
+    }
+    let req = match parse_body(body) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let email = req.get("email").and_then(|e| e.as_str()).unwrap_or("").to_string();
+    let role = req.get("role").and_then(|r| r.as_str()).unwrap_or("").to_string();
+    if email.is_empty() || role.is_empty() {
+        return err_json(StatusCode::BAD_REQUEST, "email and role are required");
+    }
+    match server.engine.lock().unwrap().set_user_role(board, &email, &role, principal) {
+        Ok(user) => ok_json(json!({ "ok": true, "user": user })),
+        Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}

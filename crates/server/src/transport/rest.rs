@@ -449,6 +449,7 @@ fn route_blocking(
         ("POST", ["auth", "signup"]) => crate::transport::rest_auth::signup(server, board, &principal, body),
         ("POST", ["auth", "login"]) => crate::transport::rest_auth::login(server, board, body),
         ("POST", ["auth", "logout"]) => crate::transport::rest_auth::logout(server, board, body),
+        ("POST", ["auth", "role"]) => crate::transport::rest_auth::set_role(server, board, &principal, body),
         ("GET", ["auth", "me"]) => {
             crate::transport::rest_auth::me(server, board, crate::identity::keys::token(headers).as_deref())
         }

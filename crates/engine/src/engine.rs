@@ -645,6 +645,16 @@ impl ServerlessEngine {
         crate::auth::user_list(self.db.as_ref(), board_id)
     }
 
+    pub fn set_user_role(
+        &mut self,
+        board_id: &str,
+        email: &str,
+        role: &str,
+        caller: &Principal,
+    ) -> anyhow::Result<crate::auth::User> {
+        crate::auth::user_set_role(self.db.as_mut(), board_id, email, role, caller)
+    }
+
     pub fn logout_user(&mut self, token: &str) -> anyhow::Result<bool> {
         crate::auth::user_logout(self.db.as_mut(), token)
     }

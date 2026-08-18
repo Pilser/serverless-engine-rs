@@ -237,6 +237,42 @@ pub fn user_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<User>>
     Ok(out)
 }
 
+/// Change a user's role. The caller must be admin/owner. Also expires the
+/// user's sessions so stale tokens don't keep the old role.
+pub fn user_set_role(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    role: &str,
+    caller: &Principal,
+) -> anyhow::Result<User> {
+    require_role(caller, role_rank("admin"))?;
+    let email = email.to_lowercase();
+    let key = user_key(board_id, &email);
+    let Some(row) = db.get(TABLE_USERS, &key)? else {
+        anyhow::bail!("user {email} not found");
+    };
+    let mut data = row.data;
+    data["role"] = Json::String(role.to_string());
+    db.update(TABLE_USERS, &key, &data)?;
+    // Expire the user's sessions (delete them).
+    let q = Query {
+        filter: SrvFilter {
+            conds: vec![
+                board_cond(board_id),
+                FilterCond { field: "$.email".to_string(), op: Op::Eq, value: Json::String(email.clone()) },
+            ],
+        },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    db.delete(TABLE_SESSIONS, &q.filter)?;
+    let user: User = serde_json::from_value(data)?;
+    Ok(user)
+}
+
 /// Create a user. `role` is clamped: only an admin/owner caller may set a role
 /// above reader; otherwise the new user is a reader.
 /// Two modes, chosen per-call:

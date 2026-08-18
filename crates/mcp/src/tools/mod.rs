@@ -31,6 +31,7 @@ pub fn run(
         "auth.signup" => auth::signup(engine, principal, arguments),
         "auth.login" => auth::login(engine, principal, arguments),
         "auth.me" => auth::me(engine, principal, arguments),
+        "auth.set_role" => auth::set_role(engine, principal, arguments),
         "users.list" => users::list(engine, principal, arguments),
         "keys.list" => keys::list(engine, principal, arguments),
         "records.submit" => records::submit(engine, principal, arguments),

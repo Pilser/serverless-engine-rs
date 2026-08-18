@@ -348,6 +348,44 @@ fn subst_strings(v: &mut Json, payload: &Json) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Type-aware substitution for `{{$.path}}` placeholders: when a string is a
+/// single placeholder and the referenced value is a JSON number/bool/null, the
+/// value is substituted as its JSON type (so `$inc` deltas stay numbers);
+/// otherwise the string is rendered with `template_swap` (string concat).
+pub fn subst_patch(v: Json, payload: &Json) -> anyhow::Result<Json> {
+    match v {
+        Json::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.starts_with("{{") && trimmed.ends_with("}}") {
+                let path = trimmed[2..trimmed.len() - 2].trim();
+                let val = crate::expr::get_path(payload, path);
+                if !val.is_null() {
+                    match val {
+                        Json::Number(_) | Json::Bool(_) => return Ok(val),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Json::String(template_swap(payload, &s)?))
+        }
+        Json::Array(a) => {
+            let mut out = Vec::with_capacity(a.len());
+            for el in a {
+                out.push(subst_patch(el, payload)?);
+            }
+            Ok(Json::Array(out))
+        }
+        Json::Object(m) => {
+            let mut out = serde_json::Map::with_capacity(m.len());
+            for (k, val) in m {
+                out.insert(k, subst_patch(val, payload)?);
+            }
+            Ok(Json::Object(out))
+        }
+        other => Ok(other),
+    }
+}
+
 /// Percent-encode a `{k: v}` map into `application/x-www-form-urlencoded`.
 fn urlencode_form(form: &Json) -> String {
     fn enc(s: &str) -> String {
@@ -507,7 +545,13 @@ fn apply_action(
             let tbl = obj.get("table").and_then(|v| v.as_str()).unwrap_or(table);
             let filter = obj.get("filter").ok_or_else(|| anyhow::anyhow!("$patch_other needs \"filter\""))?;
             let patch = obj.get("patch").ok_or_else(|| anyhow::anyhow!("$patch_other needs \"patch\""))?;
-            crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(filter)?, patch)?;
+            // Resolve {{$.field}} placeholders in the filter AND patch from the
+            // triggering payload (with type-aware substitution so $inc deltas
+            // stay numbers), e.g. filter {"item_id":"{{$.item_id}}"} and
+            // patch {"$inc":{"quantity":"{{$.quantity}}"}}.
+            let filter = subst_patch(filter.clone(), payload)?;
+            let patch = subst_patch(patch.clone(), payload)?;
+            crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(&filter)?, &patch)?;
         }
         "$transaction" => {
             let steps = val.as_array().ok_or_else(|| anyhow::anyhow!("$transaction must be an array"))?;

@@ -159,12 +159,21 @@ pub fn bulk(
     };
     let upsert = params.get("upsert").map(|v| v == "1").unwrap_or(false);
     let writer = principal.writer.clone();
-    match server
-        .engine
-        .lock()
-        .unwrap()
-        .bulk_insert(board, table, records.clone(), writer.as_deref(), upsert, principal)
-    {
+    let migrate = params.get("migrate").map(|v| v == "1").unwrap_or(false);
+    let result = if migrate {
+        server
+            .engine
+            .lock()
+            .unwrap()
+            .bulk_import(board, table, records.clone(), writer.as_deref(), principal)
+    } else {
+        server
+            .engine
+            .lock()
+            .unwrap()
+            .bulk_insert(board, table, records.clone(), writer.as_deref(), upsert, principal)
+    };
+    match result {
         Ok(seqs) => ok_json(json!({ "ok": true, "seqs": seqs })),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e.to_string()),
     }

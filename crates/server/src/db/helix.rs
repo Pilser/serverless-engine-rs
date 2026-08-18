@@ -318,6 +318,10 @@ pub struct HelixDatabase {
     /// inserts don't hit the cap; search falls back to the Rust scan until the
     /// index is built.
     text_indexed: Mutex<HashSet<(String, String)>>,
+    /// (tenant,label) pairs already probed (regardless of outcome). Once probed
+    /// we never re-probe, so a negative result (index not yet built) is cached
+    /// too — otherwise every insert pays an extra index_probe round-trip.
+    text_probed: Mutex<HashSet<(String, String)>>,
 }
 
 impl HelixDatabase {
@@ -326,6 +330,7 @@ impl HelixDatabase {
             client: Client::new(base_url)?,
             _boards: Mutex::new(HashMap::new()),
             text_indexed: Mutex::new(HashSet::new()),
+            text_probed: Mutex::new(HashSet::new()),
         })
     }
 
@@ -336,6 +341,9 @@ impl HelixDatabase {
         let key = (tenant.to_string(), label.to_string());
         if self.text_indexed.lock().unwrap().contains(&key) {
             return true;
+        }
+        if self.text_probed.lock().unwrap().contains(&key) {
+            return false;
         }
         // Probe: a text_search_nodes query succeeds iff the index exists.
         let root = json!({
@@ -350,8 +358,9 @@ impl HelixDatabase {
         let batch = request::read_batch(vec![request::entry("h", root)], vec!["h"]);
         let ok = self.client.post("read", "index_probe", batch).is_ok();
         if ok {
-            self.text_indexed.lock().unwrap().insert(key);
+            self.text_indexed.lock().unwrap().insert(key.clone());
         }
+        self.text_probed.lock().unwrap().insert(key);
         ok
     }
 
@@ -558,6 +567,69 @@ impl Database for HelixDatabase {
             (self.tenant(&board), engine_label(&table))
         };
         self.write_node(tenant.as_str(), &label, &row)
+    }
+
+    fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Route all rows to the same (tenant, label); they must share a board.
+        let table = table.to_string();
+        let first = &rows[0];
+        let (tenant, label) = if is_apps(&table) {
+            let board = first
+                .data
+                .get("board_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| board_from_key(&table, &first.key))
+                .ok_or_else(|| anyhow::anyhow!("wb_apps bulk_insert missing board_id"))?;
+            (self.tenant(&board), engine_label("wb_apps"))
+        } else if table == "wb_records" {
+            let board = first
+                .data
+                .get("board_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("wb_records bulk_insert missing board_id"))?
+                .to_string();
+            (self.tenant(&board), engine_label("wb_records"))
+        } else {
+            let board = board_from_row(&table, &first.key, &first.data)
+                .ok_or_else(|| anyhow::anyhow!("cannot route {table} bulk_insert"))?;
+            (self.tenant(&board), engine_label(&table))
+        };
+
+        let indexed = self.is_text_indexed(tenant.as_str(), &label);
+        let mut entries: Vec<Json> = Vec::with_capacity(rows.len());
+        let mut seqs = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let mut props: Vec<(String, Json)> = Vec::new();
+            props.push((DATA_PROP.to_string(), json!(row.data.to_string())));
+            for (k, v) in routing_props(&row.data) {
+                props.push((k, v));
+            }
+            if label == engine_label("wb_records") {
+                if indexed {
+                    props.push((SEARCH_PROP.to_string(), json!(search_text(&row.data))));
+                }
+                for (k, v) in numeric_mirror_props(&row.data) {
+                    props.push((k, v));
+                }
+            }
+            let keyval_scalar = match &row.key {
+                Key::Int(v) => json!(*v),
+                Key::Text(s) => json!(s),
+            };
+            props.push((helixdb::row::KEY_PROP.to_string(), keyval_scalar));
+            entries.push(request::add_n(&label, tenant.as_str(), &props));
+            seqs.push(match &row.key {
+                Key::Int(v) => *v,
+                Key::Text(_) => 0,
+            });
+        }
+        let batch = request::write_batch(entries, vec!["created"]);
+        let _ = self.client.post("write", "write_batch", batch)?;
+        Ok(seqs)
     }
 
     fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {

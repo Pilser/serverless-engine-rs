@@ -144,6 +144,12 @@ impl Database for CachedDatabase {
         Ok(seq)
     }
 
+    fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
+        let seqs = self.inner.bulk_insert(table, rows)?;
+        self.invalidate_table(table);
+        Ok(seqs)
+    }
+
     fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
         let ck = format!("{table}::k::{}", key_repr(pk));
         if let Some(Cached::Row(row)) = self.cache_get(&ck) {

@@ -128,21 +128,16 @@ must update a per-table row in this doc's status table.
 
 ## 5. Status
 
-| # | Table | Source | Engine | Edges synced | Status |
-|---|-------|--------|--------|--------------|--------|
-| 1 | profiles | 343 | — | — | pending |
-| 2 | learners | 294 | — | — | pending |
-| 3 | classes | 7 | — | — | pending |
-| 4 | subjects | 26 | — | — | pending |
-| 5 | guardians | 42 | — | — | pending |
-| 6 | term_results | 2334 | — | — | pending |
-| ... | (ALL ~180 source tables, re-migrated fresh into the new board) | | | | |
-| — | auth users (signup w/ hashes) | 343 | — | n/a | pending |
+> **Board:** `b_7z5lr8zaurkd0000` (HelixDB tenant). Migration is **in progress** —
+> see `MIGRATION_STATUS.md` for the live per-table checklist. The engine's
+> `next_seq`/`find_unique_holder` do full-table scans per row (O(n²)); large
+> tables load slowly, so the run is detached in tmux and idempotent (`?upsert=1`
+> on `unique_key=$.id`), so interrupted runs resume safely.
 
 ## 6. Board / tenant
 
-- New board (tenant) id: **TBD — created at migration start**
-- `config.py`: `BOARD` updated to the new board id; `ENGINE_BASE` = daemon URL
+- Board (tenant) id: **`b_7z5lr8zaurkd0000`** (created at migration start)
+- `config.py`: `BOARD` set to the board id; `ENGINE_BASE` = daemon URL
 - Owner token = board id (owner role)
 
 ## 7. Known engine considerations

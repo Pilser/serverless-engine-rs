@@ -441,6 +441,39 @@ pub fn record_bulk_insert(
     }
 }
 
+/// Fast bulk import for migration: computes the starting seq once, then writes
+/// each row directly. Skips the per-row unique-key check, recipes, webhooks and
+/// audit (deferred — run `graph sync` after load). Idempotent by seq: rows are
+/// keyed by the assigned seq, so a re-run into a fresh table won't collide.
+/// `upsert` is ignored: this path always appends (callers drop the table first
+/// for a clean reload).
+pub fn record_bulk_import(
+    db: &mut dyn Database,
+    board_id: &str,
+    table: &str,
+    records: Vec<Json>,
+    writer: Option<&str>,
+    principal: &Principal,
+) -> anyhow::Result<Vec<i64>> {
+    let cfg = load_table(db, board_id, table)?;
+    let mut seq = next_seq(db, board_id, table)?;
+    let created = now_str();
+    let mut seqs = Vec::with_capacity(records.len());
+    let mut rows = Vec::with_capacity(records.len());
+    for payload in records {
+        let mut prepared = crate::schema::prepare_payload(db, &cfg, payload)?;
+        crate::auth::force_scope(principal, &mut prepared);
+        rows.push(Row::new(
+            Key::Int(seq),
+            stored_record_json(board_id, table, seq, &prepared, &created, writer),
+        ));
+        seqs.push(seq);
+        seq += 1;
+    }
+    db.bulk_insert(TABLE_RECORDS, rows)?;
+    Ok(seqs)
+}
+
 pub fn record_get(db: &dyn Database, board_id: &str, table: &str, seq: i64) -> anyhow::Result<Option<Record>> {
     let cfg = load_table(db, board_id, table)?;
     let Some(mut rec) = find_record(db, board_id, table, seq)? else {

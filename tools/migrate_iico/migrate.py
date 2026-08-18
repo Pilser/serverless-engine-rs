@@ -94,6 +94,8 @@ def main() -> None:
     ap.add_argument("--users", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="test mode: N rows/table")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--migrate", action="store_true", help="fast import: drop table, bulk_import, then graph sync")
+    ap.add_argument("--batch", type=int, default=None, help="loader batch size (default config.BATCH_SIZE)")
     args = ap.parse_args()
 
     os.makedirs(os.path.join(args.workdir, "raw"), exist_ok=True)
@@ -117,7 +119,12 @@ def main() -> None:
         run(args.workdir, "extract.py", [table], args.force)
         apply_limit(table, args.limit, args.workdir)
         run(args.workdir, "transform.py", [table], args.force)
-        run(args.workdir, "loader.py", [table], args.force)
+        loader_args = [table]
+        if args.migrate:
+            loader_args.append("--migrate")
+        if args.batch:
+            loader_args.append(f"--batch={args.batch}")
+        run(args.workdir, "loader.py", loader_args, args.force)
         if args.limit is None:
             # Full load: verify refs + materialize graph edges.
             run(args.workdir, "loader.py", [f"__verify__{table}"], args.force)

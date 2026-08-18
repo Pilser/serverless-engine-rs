@@ -78,15 +78,31 @@ def ensure_table(table: str) -> None:
     flush_print(f"created table: {table} (permissive schema, unique_key=$.id)")
 
 
-def load_table(workdir: str, table: str, count_check: bool = True) -> None:
+def load_table(
+    workdir: str,
+    table: str,
+    count_check: bool = True,
+    migrate: bool = False,
+    batch_size: int | None = None,
+) -> None:
     path = os.path.join(workdir, "transformed", f"{table}.json")
     with open(path) as f:
         rows = json.load(f)
-    ensure_table(table)
+    if migrate:
+        # Clean reload: drop any partial data, then fast-import (skips per-row
+        # unique/recipe/hook/audit work; run graph sync afterwards).
+        if table_exists(table):
+            api("DELETE", f"/tables/{table}")
+            flush_print(f"dropped table: {table} (clean reload)")
+        ensure_table(table)
+    else:
+        ensure_table(table)
+    bs = batch_size or BATCH_SIZE
     total = 0
-    for i in range(0, len(rows), BATCH_SIZE):
-        batch = rows[i : i + BATCH_SIZE]
-        resp = api("POST", f"/tables/{table}/bulk?upsert=1", {"records": batch})
+    for i in range(0, len(rows), bs):
+        batch = rows[i : i + bs]
+        q = "?migrate=1" if migrate else "?upsert=1"
+        resp = api("POST", f"/tables/{table}/bulk{q}", {"records": batch})
         seqs = resp.get("seqs", [])
         total += len(seqs)
         flush_print(f"  {table}: loaded {total}/{len(rows)}")
@@ -185,6 +201,11 @@ def load_users(workdir: str, users: list[dict]) -> None:
 def main() -> None:
     workdir = sys.argv[1]
     table = sys.argv[2]
+    migrate = "--migrate" in sys.argv
+    batch_size = None
+    for a in sys.argv:
+        if a.startswith("--batch="):
+            batch_size = int(a.split("=", 1)[1])
     if table == "__users__":
         path = os.path.join(workdir, "raw", "_users.json")
         with open(path) as f:
@@ -194,7 +215,7 @@ def main() -> None:
     elif table.startswith("__sync__"):
         graph_sync(BOARD, table[len("__sync__"):])
     else:
-        load_table(workdir, table)
+        load_table(workdir, table, migrate=migrate, batch_size=batch_size)
 
 
 if __name__ == "__main__":

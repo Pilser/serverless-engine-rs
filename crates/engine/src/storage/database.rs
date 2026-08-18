@@ -104,6 +104,16 @@ pub trait Database: Send + Sync + 'static {
 
     fn insert(&mut self, table: &str, row: Row) -> anyhow::Result<i64>;
 
+    /// Insert many rows in one batch. Default falls back to per-row `insert`;
+    /// adapters (e.g. HelixDB) override to send a single write batch.
+    fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
+        let mut seqs = Vec::with_capacity(rows.len());
+        for row in rows {
+            seqs.push(self.insert(table, row)?);
+        }
+        Ok(seqs)
+    }
+
     fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>>;
 
     fn update(&mut self, table: &str, pk: &Key, patch: &Json) -> anyhow::Result<()>;

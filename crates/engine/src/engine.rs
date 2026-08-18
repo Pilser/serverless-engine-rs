@@ -346,6 +346,30 @@ impl ServerlessEngine {
         Ok(seqs)
     }
 
+    /// Fast bulk import for migration (see `crud::record_bulk_import`). Skips
+    /// per-row recipes/webhooks/audit; run `graph_sync` after loading.
+    pub fn bulk_import(
+        &mut self,
+        board_id: &str,
+        table: &str,
+        records: Vec<Json>,
+        writer: Option<&str>,
+        principal: &Principal,
+    ) -> anyhow::Result<Vec<i64>> {
+        let seqs = crate::crud::record_bulk_import(
+            self.db.as_mut(),
+            board_id,
+            table,
+            records.clone(),
+            writer,
+            principal,
+        )?;
+        for (seq, record) in seqs.iter().zip(records.into_iter()) {
+            self.emit(board_id, "created", *seq, record);
+        }
+        Ok(seqs)
+    }
+
     /// Import records from a JSON (array/JSONL) or CSV dump. Each row is
     /// validated against the table schema; invalid rows are skipped and
     /// reported rather than aborting the whole import.

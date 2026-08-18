@@ -235,7 +235,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "apps".into(),
         verb: "update".into(),
         summary: "Update an app's config.".into(),
-        description: "Sets schema, unique key, computed, validate, redact, TTL, rate or audit on a board.".into(),
+        description: "Sets schema, unique key, computed, validate, redact, TTL, rate or audit on a board. FLAGS: --schema <json> (JSON Schema Draft 2020-12, per-table or board-wide); --unique_key <path> (e.g. $.id — upsert conflict detection); --computed <json> (object of {field: expression} evaluated on every write, e.g. {\"updated_at\":\"$now\"} or {\"full_name\":\"concat($first_name, ' ', $last_name)\"}); --validate <json> (array of {\"when\":\"expr\",\"error\":\"msg\"} rules rejected on write); --redact <json> (array of JSON paths masked as *** on read); --ttl_seconds <n>; --rate <json>; --audit true|false. COMPUTED/VALIDATE EXPRESSIONS: plain JSON paths ($field), string literals, numbers, and simple functions. Board-level settings apply to all tables unless a table overrides. REST equivalent: PATCH /api/srv/<board>/app with the same fields, or per-table via tables.create.".into(),
         positional: vec![ArgSpec {
             name: "board".into(),
             r#type: ArgType::Board,
@@ -342,7 +342,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "submit".into(),
         summary: "Insert a record into a board.".into(),
-        description: "Inserts a JSON document as a new record in the board's tenant; the record is stored as a HelixDB graph node under the table label, with numeric payload fields mirrored as node properties for aggregate pushdown. Returns its seq.".into(),
+        description: "Inserts a JSON document as a new record in the board's tenant; the record is stored as a HelixDB graph node under the table label, with numeric payload fields mirrored as node properties for aggregate pushdown. Returns its seq. The payload is a JSON object; `id` (string UUID) is the app's logical id and is used by graph.sync to resolve *_id refs. The engine assigns seq (int) automatically — do not pass one. Per-table schema (if set via tables.create/apps.update) validates the payload; computed_json fields are derived and merged into the stored payload; unique_key (e.g. $.id) rejects duplicates. REST equivalent: POST /api/srv/<board>/tables/<table>/bulk {\"records\":[{...}]} (?upsert=1 to overwrite on unique-key conflict, ?migrate=1 for fast bulk import that skips per-row validation/recipes).".into(),
         positional: vec![ArgSpec {
             name: "board".into(),
             r#type: ArgType::Board,
@@ -378,7 +378,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "query".into(),
         summary: "Filter records by conditions.".into(),
-        description: "Traverses the board tenant's record nodes (table label) and returns those matching a filter, sorted and paged. Filter conditions on routing props (board_id/table/seq) and mirrored numeric fields (p_*) push down to HelixDB predicates; payload-path conditions are applied by the engine after a tenant-scoped node fetch.".into(),
+        description: "Returns records matching a filter, sorted and paged. FILTER FORMAT (JSON): pass --filter as one of: (1) an equality map {\"class_id\":\"abc\"}; (2) an op map {\"price\":{\"gte\":500}}; (3) an array of condition objects [{\"field\":\"$.score\",\"op\":\"gte\",\"value\":50}, ...]; (4) {\"$and\":[cond, cond]}; (5) {\"search\":\"term\", ...extra ops} for full-text. OPERATORS: eq, ne, gt, gte, lt, lte, in (array), contains (string or array), search (full-text; use records.search for ranked results). Field paths are JSON paths into the payload, e.g. $.learner_id or learner_id (the leading $. is optional). OTHER FLAGS: --limit (1..=500, default 50), --order <path> (e.g. --order $.created_at --dir asc|desc; --dir desc is newest-first), --offset <n>, --allow_unfiltered. CONDITIONS on top-level payload fields push down to HelixDB mirrored properties; nested paths are filtered by the engine after a tenant-scoped fetch. RESPONSE: {\"ok\":true,\"records\":[{\"seq\":1,\"payload\":{...},\"created_at\":\"...\"}]}. REST equivalent: GET /api/srv/<board>/tables/<table>/query?filter=<urlencoded-json>&order=<path>&dir=<asc|desc>&limit=&offset=".into(),
         positional: vec![ArgSpec {
             name: "board".into(),
             r#type: ArgType::Board,
@@ -581,7 +581,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "aggregate".into(),
         summary: "Aggregate records (count/sum/avg/min/max), optionally grouped.".into(),
-        description: "Runs an aggregate over a table's records: count/sum/avg/min/max on a payload field, optionally grouped by another field. The engine pushes the aggregate down to HelixDB when the target fields are mirrored node properties (top-level numeric payload fields); otherwise it computes in Rust over a tenant-scoped fetch. Use this instead of records.query when you only need summary math, not the rows themselves.".into(),
+        description: "Runs an aggregate over a table's records: count/sum/avg/min/max on a payload field, optionally grouped by another field. The engine pushes the aggregate down to HelixDB when the target fields are mirrored node properties (top-level numeric payload fields); otherwise it computes in Rust over a tenant-scoped fetch. Use this instead of records.query when you only need summary math, not the rows themselves. USAGE: records aggregate <board> <table> count [--filter {...}] [--field price] [--group_by category]. --filter takes the same JSON as records.query (see records.query help for the filter format/operators). RESPONSE: {\"aggregate\":[{\"value\":343}]} or grouped: [{\"group\":\"A\",\"value\":120}]. REST equivalent: GET /api/srv/<board>/tables/<table>/aggregate?op=count[&field=price][&group_by=category][&filter=<json>].".into(),
         positional: vec![
             ArgSpec {
                 name: "board".into(),
@@ -1084,7 +1084,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "recipes".into(),
         verb: "add".into(),
         summary: "Add an automation recipe to a board.".into(),
-        description: "Registers a recipe that runs actions when its trigger event fires.".into(),
+        description: "Registers a recipe that runs actions when its trigger event fires. TRIGGER EVENTS: \"record.created\", \"record.updated\", \"record.deleted\", \"record.inbound\" (webhook/events), \"record.cron\". --when accepts the event string or {\"event\":\"record.created\",\"table\":\"<name>\",\"when\":\"<expr>\"} to narrow to a table/condition; --match <json> is a filter on the triggering payload (same shape as records.query --filter). ACTIONS (array of objects, applied in order, all optional): {\"$compute\":{\"$.field\":\"<expr>\"}} (set derived field); {\"$set\":{\"$.field\":\"<value>\"}}; {\"$copy\":{\"$.dst\":\"$.src\"}} / {\"$move\":...}; {\"$upsert_other\":{\"table\":\"<t>\",\"record\":{...},\"unique_key\":\"$.id\"}} (write to another table); {\"$patch_other\":{\"table\":\"<t>\",\"seq\":N,\"patch\":{...}}}; {\"$call\":{\"url\":\"...\",\"method\":\"POST\",\"body\":{...},\"headers\":{...},\"secret\":\"<name>\"}} (HTTP action; {\"secret\":\"$name\"} resolves board secrets); {\"$log\":\"msg\"}; {\"$set_state\":{\"$.stage\":\"approved\"}}; {\"$schedule\":{...}}; array ops: {\"$push\":{\"$.arr\":v}}, {\"$pull\":...}, {\"$merge\":{\"$.a\":\"$.b\"}}, {\"$sort\":{\"$.arr\":\"asc\"}}, {\"$slice\":{\"$.arr\":[0,10]}}. EXPRESSION SYNTAX for $compute/$when: JSON paths ($.field or field), literals, and functions (concat, $now, arithmetic). RECIPE USES: approval state machines (advance_*), stock level updates, auto-derivations that must write another table, notifications. REST equivalent: POST /api/srv/<board>/recipes (see recipes.list).".into(),
         positional: vec![
             ArgSpec {
                 name: "board".into(),

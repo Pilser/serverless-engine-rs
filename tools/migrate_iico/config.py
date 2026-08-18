@@ -57,7 +57,7 @@ GRAPH_EDGES = {
     "salaries": {"user_id": "profiles"},
     "payroll_lines": {"employee_id": "employees"},
     "employee_advances": {"employee_id": "employees"},
-    "assets": {"assigned_to_staff": "profiles", "category_id": "asset_categories"},
+    "assets": {"assigned_to_staff": "profiles", "category_id": "inventory_categories"},
     "asset_custodians": {"employee_id": "employees", "asset_id": "assets"},
     "clinic_visits": {"learner_id": "learners", "staff_id": "profiles", "recorded_by": "profiles"},
     "health_visits": {"learner_id": "learners", "recorded_by": "profiles"},

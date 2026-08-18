@@ -263,6 +263,10 @@ impl Database for CachedDatabase {
     ) -> anyhow::Result<Vec<Json>> {
         self.inner.aggregate(table, board, table_name, filter, agg, field, group_by, ttl)
     }
+
+    fn count_records(&self, board: &str) -> anyhow::Result<i64> {
+        self.inner.count_records(board)
+    }
 }
 
 struct BlobEntry {

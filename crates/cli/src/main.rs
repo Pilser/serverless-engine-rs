@@ -120,7 +120,7 @@ fn cmd_daemon(args: &[String]) -> anyhow::Result<String> {
             let report_server = server.clone();
             let mcp = std::sync::Arc::new(
                 mcp::McpServer::new(server.engine.clone()).with_reporter(std::sync::Arc::new(
-                    move |board| server::resources::resource_report(&report_server, board),
+                    move |board| server::resources::resource_report_cached(&report_server, board),
                 )),
             );
             let addr = cfg.addr();
@@ -140,6 +140,7 @@ fn cmd_daemon(args: &[String]) -> anyhow::Result<String> {
              note: daemon hosts the engine + MCP over HTTP; other surfaces connect to it.\n\
              --db <dir>   data directory (default ./data; or $SRV_DATA_DIR / .env)\n\
              env: SRV_HOST SRV_PORT SRV_DATA_DIR SRV_DB SRV_HELIX_URL SRV_HTTP_TIMEOUT_MS (see .env.example)\n\
+             bg loops: SRV_BG_TTL=1 SRV_BG_JOBS=1 SRV_BG_HOOKS=1 (default off)\n\
              got: '{:?}'\n",
             other
         )),

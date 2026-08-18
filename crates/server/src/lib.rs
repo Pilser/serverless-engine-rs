@@ -67,9 +67,18 @@ impl Server {
     }
 
     pub fn spawn_background(&self) {
-        jobs::spawn_ttl_sweeper(self.engine.clone());
-        jobs::spawn_scheduler(self.engine.clone());
-        jobs::spawn_webhook_worker(self.engine.clone());
+        // These loops are opt-in: each one periodically scans the whole store,
+        // so idle deployments (no TTL tables, no cron jobs, no webhooks) should
+        // leave them off. Enable via SRV_BG_TTL=1 / SRV_BG_JOBS=1 / SRV_BG_HOOKS=1.
+        if env_flag("SRV_BG_TTL") {
+            jobs::spawn_ttl_sweeper(self.engine.clone());
+        }
+        if env_flag("SRV_BG_JOBS") {
+            jobs::spawn_scheduler(self.engine.clone());
+        }
+        if env_flag("SRV_BG_HOOKS") {
+            jobs::spawn_webhook_worker(self.engine.clone());
+        }
     }
 
     pub fn rate_limits_for(&self, board: &engine::Board) -> RateLimits {
@@ -111,6 +120,10 @@ impl Default for ServerBuilder {
 
 pub fn engine_version() -> &'static str {
     engine::version()
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).map(|v| v == "1").unwrap_or(false)
 }
 
 fn broker_notifier(broker: Arc<broker::InProcBroker>) -> engine::Notify {

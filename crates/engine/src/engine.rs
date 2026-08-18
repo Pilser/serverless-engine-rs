@@ -474,6 +474,21 @@ impl ServerlessEngine {
         crate::crud::record_count(self.db.as_ref(), board_id, table)
     }
 
+    /// Fast board-wide record count (one backend query where supported).
+    pub fn count_records_board(&self, board_id: &str) -> anyhow::Result<i64> {
+        match self.db.count_records(board_id) {
+            Ok(n) => Ok(n),
+            Err(_) => {
+                // Backend without a fast path: sum per-table counts.
+                let mut total = 0i64;
+                for cfg in crate::crud::table_list(self.db.as_ref(), board_id)? {
+                    total += crate::crud::record_count(self.db.as_ref(), board_id, &cfg.table)?;
+                }
+                Ok(total)
+            }
+        }
+    }
+
     pub fn records_after(&self, board_id: &str, after: i64) -> anyhow::Result<Vec<Record>> {
         crate::crud::records_after(self.db.as_ref(), board_id, after)
     }

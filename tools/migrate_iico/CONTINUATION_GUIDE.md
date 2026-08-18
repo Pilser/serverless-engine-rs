@@ -144,3 +144,23 @@ tests), and never touch `target/`. Build with plain `cargo check` /
 3. Verify: `records aggregate <board> <t> count` == local `len(data/raw/<t>.json)`
    for every non-empty table.
 4. Update `MIGRATION_STATUS.md` per table.
+
+## Known source-data orphans (verified against raw dumps, 2026-08-18)
+
+These `*_id` refs exist in the source data but point at rows that are absent
+from every local dump (deleted source rows). The loader's `verify_references`
+step will fail on them; the load itself is complete and correct, and `graph
+sync` skips them safely. Do NOT re-extract to "fix" these — they are gone from
+the source DB.
+
+- `assets.category_id` → **12 refs** point at `inventory_categories`, not
+  `asset_categories`. `GRAPH_EDGES` in `config.py` was corrected
+  (`assets.category_id → inventory_categories`). The 12 ids all exist there.
+- `in_app_notifications.user_id` → **7 orphans** not in `profiles`:
+  `00572519-77c3-4afa-b45d-afe41067b276`, `3092ced9-b2b7-4f3f-a82a-90c9e1b10eb0`,
+  `479717c6-f00f-4a6b-b785-5467d0b62eb8`, `6557cc87-dbde-45ef-b020-f75d3e2fbad7`,
+  `86059752-c59b-4312-b180-9bb2ece6d23a`, `961ee724-6e85-49ad-983b-31c2ece94039`,
+  `9a13a5ca-e151-44b7-84a4-c69bd3ce4fcb`.
+  If a future verify run fails on these, pass the table through
+  `loader.py data __sync__<table>` directly (verify is source-truth only;
+  sync is what materializes edges).

@@ -1055,6 +1055,40 @@ impl Database for HelixDatabase {
         let rows = self.query(table, &q)?.rows;
         engine::storage::database::aggregate_rows(&rows, filter, agg, field, group_by, ttl)
     }
+
+    /// Count every record on the board in ONE Helix aggregate (label + tenant,
+    /// no per-table loop). This is what `resources` uses; the old per-table
+    /// path made 176 sequential aggregate calls, each 100-800ms on Helix.
+    fn count_records(&self, board: &str) -> anyhow::Result<i64> {
+        let tenant = self.tenant(board);
+        let label = engine_label("wb_records");
+        let pred = helixdb::predicate::Predicate::new()
+            .eq("$label", json!(label))
+            .eq(helixdb::tenant::TENANT_PROP, json!(tenant.as_str()));
+        let src = json!({ "nodes_where": { "predicate": pred.into_json() } });
+        let root = json!({
+            "aggregate_by": {
+                "input": src,
+                "function": { "count": null },
+                "property": SEQ_PROP,
+            }
+        });
+        let batch = request::read_batch(vec![request::entry("agg", root)], vec!["agg"]);
+        let resp = self.client.post("read", "count_records", batch)?;
+        let rows = resp.rows("agg");
+        // Helix names the result "<prop>_<Agg>" e.g. `seq_Count`; be liberal.
+        let n = rows
+            .first()
+            .and_then(|r| {
+                r.as_object().and_then(|o| {
+                    o.iter()
+                        .find(|(k, _)| k.to_lowercase().ends_with("_count") || *k == "count" || *k == "value")
+                        .and_then(|(_, v)| v.as_f64().map(|f| f as i64))
+                })
+            })
+            .unwrap_or(0);
+        Ok(n)
+    }
 }
 
 impl HelixDatabase {

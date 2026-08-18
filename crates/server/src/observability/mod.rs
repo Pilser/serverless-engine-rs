@@ -1,3 +1,4 @@
+use crate::resources::ResourceCache;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -7,6 +8,7 @@ pub struct Obs {
     requests: AtomicU64,
     in_flight: AtomicU64,
     cpu: Mutex<Option<(u64, Instant)>>,
+    pub resource_cache: ResourceCache,
 }
 
 impl Obs {
@@ -15,6 +17,7 @@ impl Obs {
             requests: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
             cpu: Mutex::new(None),
+            resource_cache: ResourceCache::new(),
         }
     }
 

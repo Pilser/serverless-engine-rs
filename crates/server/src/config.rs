@@ -63,6 +63,12 @@ fn get(dotenv: &HashMap<String, String>, key: &str, default: &str) -> String {
 /// Minimal `.env` parser: `KEY=VALUE` lines, `#` comments, blank lines ignored,
 /// `export ` prefix stripped, values optionally quoted. Real environment
 /// variables are left untouched (they win over the file).
+///
+/// Background-loop toggles (all default OFF — each loop periodically scans the
+/// whole store, so leave them off unless the feature is actually used):
+///   SRV_BG_TTL=1   enable the TTL sweeper (needed only with TTL tables)
+///   SRV_BG_JOBS=1  enable the cron/job scheduler (needed only with cron jobs)
+///   SRV_BG_HOOKS=1 enable the webhook delivery worker (needed only with webhooks)
 fn load_dotenv(path: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let Ok(content) = std::fs::read_to_string(path) else {

@@ -242,6 +242,13 @@ pub trait Database: Send + Sync + 'static {
         let rows = self.query(table, &q)?.rows;
         aggregate_rows(&rows, filter, agg, field, group_by, ttl)
     }
+
+    /// Count every record on a board in one cheap query. Default implementation
+    /// sums per-table aggregates; a backend that can count a whole tenant in a
+    /// single query (e.g. HelixDB) overrides it.
+    fn count_records(&self, _board: &str) -> anyhow::Result<i64> {
+        anyhow::bail!("count_records is not supported by the {} backend", self.adapter())
+    }
 }
 
 /// Aggregate `rows` (record JSON documents) in Rust. Used by the default

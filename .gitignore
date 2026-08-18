@@ -59,3 +59,4 @@ __pycache__/
 *.pyc
 .helix/
 .env
+tools/migrate_iico/data/done.json

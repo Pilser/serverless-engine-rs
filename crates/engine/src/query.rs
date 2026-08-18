@@ -5,6 +5,9 @@ use crate::tables::TABLE_RECORDS;
 use serde_json::Value as Json;
 
 fn table_ttl_clause(cfg: &TableConfig) -> Option<TtlClause> {
+    if cfg.ttl_seconds.is_none() && cfg.ttl_field.is_none() {
+        return None; // no TTL: let the backend push down / cache the query
+    }
     Some(TtlClause {
         seconds: cfg.ttl_seconds,
         field: cfg.ttl_field.clone(),

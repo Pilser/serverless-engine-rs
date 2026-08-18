@@ -218,3 +218,151 @@ grep 'took' /tmp/daemon_fixed.log | tail   # expect millisecond values, no 30s
 
 A standalone repro of the underlying issue (blocking client on tokio) is
 available under `/tmp/repro/` (not part of this repo).
+
+---
+
+## 8. Other resource-bound paths found while making the daemon idle (2026-08-18)
+
+The blocking-client stall is NOT the only way the daemon ends up CPU/memory
+bound or wedged. During the IICO migration completion pass, more issues
+were found and fixed. They matter because the engine is replacing the source
+Supabase DB, so the daemon must stay responsive while serving the app.
+
+### 8.1 `table_ttl_clause` always returned `Some`, disabling pushdown + cache
+
+`crates/engine/src/query.rs`:
+
+```rust
+fn table_ttl_clause(cfg: &TableConfig) -> Option<TtlClause> {
+    Some(TtlClause { seconds: cfg.ttl_seconds, field: cfg.ttl_field.clone() })
+}
+```
+
+Even for tables with NO TTL configured (both fields `None`) this returned
+`Some(TtlClause)`. Consequences:
+
+- The HelixDB adapter's `aggregate()` only pushes down to Helix when
+  `ttl.is_none()` — so **every count/aggregate fell back to a full row scan**
+  in Rust (fetch all rows for the table, count locally). For a 12k-row table
+  that's ~800ms per count.
+- `CachedDatabase::query()` skips the query cache when `ttl.is_some()` — so
+  those scans were never cached either.
+
+**Fix:** return `None` when the table has no TTL:
+
+```rust
+fn table_ttl_clause(cfg: &TableConfig) -> Option<TtlClause> {
+    if cfg.ttl_seconds.is_none() && cfg.ttl_field.is_none() {
+        return None; // no TTL: let the backend push down / cache the query
+    }
+    Some(TtlClause { seconds: cfg.ttl_seconds, field: cfg.ttl_field.clone() })
+}
+```
+
+Symptom to watch for: a `count` aggregate on a table with no TTL shows up in
+`HELIX_DEBUG=1` as `fetch_rows` with `order_by` instead of `aggregate_by`.
+
+### 8.2 `resources` counted per-table (176 sequential Helix aggregates)
+
+`crates/server/src/resources.rs` used to loop over every table and call the
+per-table aggregate:
+
+```rust
+for t in tables { records += engine.count_records(board, &t.table)?; }
+```
+
+With 176 tables, each aggregate taking 100-800ms on Helix, that's 30-60s for
+one `/resources` call — and the old code held the engine `Mutex` across the
+whole loop, blocking every other request.
+
+**Fix:** a board-wide count in ONE Helix query (label + tenant, no per-table
+loop). Added `Database::count_records(board)` to the trait (default bails; the
+engine falls back to summing per-table counts), overridden in the Helix adapter
+as a single `aggregate_by { count }` over all `wb_records` nodes for the tenant:
+
+```rust
+// crates/server/src/db/helix.rs
+fn count_records(&self, board: &str) -> anyhow::Result<i64> {
+    let pred = helixdb::predicate::Predicate::new()
+        .eq("$label", json!(engine_label("wb_records")))
+        .eq(helixdb::tenant::TENANT_PROP, json!(self.tenant(board).as_str()));
+    let root = json!({ "aggregate_by": {
+        "input": { "nodes_where": { "predicate": pred.into_json() } },
+        "function": { "count": null }, "property": SEQ_PROP,
+    }});
+    // ... post read, parse "<prop>_Count" (capital C) ...
+}
+```
+
+Result: `/resources` returns the full 21683-record count in **~0.6s**.
+
+Note: Helix names the aggregate result `<prop>_Count` (capital `C`), e.g.
+`seq_Count`, NOT `seq_count`. Parse liberally (case-insensitive `_count`
+suffix, or `count` / `value` keys).
+
+### 8.3 `report_json` self-deadlock (re-entrant engine Mutex)
+
+`crates/server/src/resources.rs` `report_json()` did:
+
+```rust
+let engine = server.engine.lock().unwrap();          // 1st lock
+...
+let rate = server.rate_limits_for(&board_of(server, board)); // board_of locks AGAIN
+```
+
+`std::sync::Mutex` is NOT reentrant — the second `lock()` on the same thread
+deadlocks forever. Every `/resources` call wedged the daemon: the main thread
+held the engine Mutex and every other request (including `/healthz` — no,
+healthz is lock-free, but any engine-touching route) waited on it. All threads
+park in `futex_wait_queue`.
+
+**Fix:** fetch the board / rate limits BEFORE taking the engine lock:
+
+```rust
+let rate: RateLimits = server.rate_limits_for(&board_of(server, board));
+let (storage, usage, now) = { let engine = server.engine.lock().unwrap(); ... };
+```
+
+**Rule of thumb:** never call anything that takes the engine lock while
+already holding it. `board_of()`, `rate_limits_for()`, `get_app()`, etc. all
+lock internally.
+
+### 8.4 Background loops were always on (CPU + store scans every few seconds)
+
+`crates/server/src/jobs.rs` spawned three loops unconditionally:
+
+| Loop | Interval | Cost when idle |
+|---|---|---|
+| TTL sweeper | 60s | full store scan for TTL-dead rows |
+| Job scheduler | 15s | `job_due` scan over the whole store |
+| Webhook worker | 2s | `hook_deliveries_due` scan over the whole store |
+
+For a deployment with no TTL tables, no cron jobs, and no webhooks (e.g. the
+IICO migration board), these burn CPU and hold the engine lock periodically
+for nothing.
+
+**Fix:** all three are now opt-in via env flags, off by default:
+
+```
+SRV_BG_TTL=1   enable the TTL sweeper (only if you use TTL tables)
+SRV_BG_JOBS=1  enable the cron/job scheduler (only if you use cron jobs)
+SRV_BG_HOOKS=1 enable the webhook delivery worker (only if you use webhooks)
+```
+
+Also spaced out realtime keepalives: WS resource ticker 2s → 60s
+(`crates/server/src/transport/ws.rs`), SSE keepalive 30s → 60s
+(`crates/server/src/transport/sse.rs`), and the MCP `apps.resources` reporter
+now uses the cached count instead of recomputing per call.
+
+### 8.5 Measured result
+
+After all fixes, with the IICO board (176 tables, 21683 records) loaded:
+
+| Metric | Before | After |
+|---|---|---|
+| Daemon RSS | ~97-111 MB | ~14 MB |
+| Daemon idle CPU | several % (background loops + cache misses) | 0.0% |
+| `/resources` latency | >60s (deadlock → hang) | ~0.6s |
+| Per-table count on 12k-row table | ~800ms (full scan) | ~0.5s (Helix pushdown) |
+| Tables list | 0.04s | 0.04s |
+

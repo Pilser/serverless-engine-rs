@@ -218,7 +218,7 @@ async fn run_ws(
     let filter_json: Option<serde_json::Value> = filter.and_then(|f| serde_json::from_str(&f).ok());
     let mut rx = server.broker.subscribe();
     let mut ticker = if resources {
-        let mut iv = interval(Duration::from_secs(2));
+        let mut iv = interval(Duration::from_secs(60));
         iv.tick().await;
         Some(iv)
     } else {
@@ -284,7 +284,10 @@ async fn run_ws(
                     std::future::pending::<()>().await;
                 }
             } => {
-                let report = crate::resources::resource_report(&server, &board);
+                // Throttle the resource report: the count sums over every table
+                // (full scans), so only emit when the client asks for it, and
+                // no more than once a minute.
+                let report = crate::resources::resource_report_cached(&server, &board);
                 let msg = serde_json::json!({ "type": "resource", "resources": report })
                     .to_string();
                 if sink.send(Message::Text(msg.into())).await.is_err() {

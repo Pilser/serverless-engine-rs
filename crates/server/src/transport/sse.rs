@@ -81,7 +81,7 @@ pub fn sse_response(
         }
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
                     if tx.send(Ok(keepalive())).await.is_err() {
                         return;
                     }

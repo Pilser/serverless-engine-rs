@@ -117,7 +117,9 @@ export function send(text, role, attachments) {
     user_id: authState.email,
     content: text,
   }
-  if (role) payload.role = role
+  if (authState.name) payload.user_name = authState.name
+  if (authState.roles && authState.roles.length > 0) payload.roles = authState.roles
+  else if (authState.role) payload.roles = [authState.role]
   if (attachments && attachments.length > 0) payload.attachments = attachments
   network.send(JSON.stringify(payload))
 }

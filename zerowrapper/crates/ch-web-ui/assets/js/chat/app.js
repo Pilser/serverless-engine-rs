@@ -120,6 +120,7 @@ function init() {
   els.authSection = document.getElementById("auth-section");
   els.userBadge = document.getElementById("user-badge");
   els.badgeDisplay = document.getElementById("badge-display");
+  els.badgeSub = document.getElementById("badge-sub");
   els.registerBtn = document.getElementById("register-btn");
   els.emailInput = document.getElementById("email-input");
   els.authError = document.getElementById("auth-error");
@@ -134,9 +135,15 @@ function init() {
 // auth.js
 var STORAGE_EMAIL = "zerowrapper_email";
 var STORAGE_SESSION = "zerowrapper_session";
+var STORAGE_NAME = "zerowrapper_name";
+var STORAGE_ROLE = "zerowrapper_role";
+var STORAGE_ROLES = "zerowrapper_roles";
 var state2 = {
   email: "",
-  sessionId: ""
+  sessionId: "",
+  name: "",
+  role: "",
+  roles: []
 };
 var agent = (window.ZW_AGENT || "").toString();
 function buildSessionId(email) {
@@ -146,16 +153,47 @@ function buildSessionId(email) {
 function loadFromStorage() {
   state2.email = localStorage.getItem(STORAGE_EMAIL) || "";
   state2.sessionId = localStorage.getItem(STORAGE_SESSION) || "";
+  state2.name = localStorage.getItem(STORAGE_NAME) || "";
+  state2.role = localStorage.getItem(STORAGE_ROLE) || "";
+  try {
+    state2.roles = JSON.parse(localStorage.getItem(STORAGE_ROLES) || "[]");
+  } catch {
+    state2.roles = [];
+  }
+}
+function loadFromQuery() {
+  const qs = new URLSearchParams(location.search);
+  const email = (qs.get("email") || "").trim();
+  if (!email)
+    return;
+  if (localStorage.getItem(STORAGE_EMAIL))
+    return;
+  state2.email = email;
+  state2.sessionId = buildSessionId(email);
+  state2.name = (qs.get("name") || "").trim();
+  state2.role = (qs.get("role") || "").trim();
+  const roles = (qs.get("roles") || "").split(",").map((r) => r.trim()).filter(Boolean);
+  state2.roles = roles.length > 0 ? roles : state2.role ? [state2.role] : [];
+  saveToStorage();
 }
 function saveToStorage() {
   if (state2.email)
     localStorage.setItem(STORAGE_EMAIL, state2.email);
   if (state2.sessionId)
     localStorage.setItem(STORAGE_SESSION, state2.sessionId);
+  if (state2.name)
+    localStorage.setItem(STORAGE_NAME, state2.name);
+  if (state2.role)
+    localStorage.setItem(STORAGE_ROLE, state2.role);
+  if (state2.roles && state2.roles.length > 0)
+    localStorage.setItem(STORAGE_ROLES, JSON.stringify(state2.roles));
 }
 function clearFromStorage() {
   localStorage.removeItem(STORAGE_EMAIL);
   localStorage.removeItem(STORAGE_SESSION);
+  localStorage.removeItem(STORAGE_NAME);
+  localStorage.removeItem(STORAGE_ROLE);
+  localStorage.removeItem(STORAGE_ROLES);
 }
 function showForm() {
   els.authSection.classList.remove("hidden");
@@ -164,7 +202,11 @@ function showForm() {
 function showBadge() {
   els.authSection.classList.add("hidden");
   els.userBadge.classList.remove("hidden");
-  els.badgeDisplay.textContent = state2.email;
+  els.badgeDisplay.textContent = state2.name || state2.email;
+  const roles = state2.roles && state2.roles.length > 0 ? state2.roles : state2.role ? [state2.role] : [];
+  const roleText = roles.length > 1 ? `${roles[0]} +${roles.length - 1}` : roles[0] || "";
+  if (els.badgeSub)
+    els.badgeSub.textContent = [roleText, state2.email].filter(Boolean).join(" · ");
 }
 function scrollToAuth() {
   els.authSection.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1606,8 +1648,12 @@ function send2(text, role, attachments) {
     user_id: state2.email,
     content: text
   };
-  if (role)
-    payload.role = role;
+  if (state2.name)
+    payload.user_name = state2.name;
+  if (state2.roles && state2.roles.length > 0)
+    payload.roles = state2.roles;
+  else if (state2.role)
+    payload.roles = [state2.role];
   if (attachments && attachments.length > 0)
     payload.attachments = attachments;
   send(JSON.stringify(payload));
@@ -1803,6 +1849,7 @@ function init4() {
   if (!els.form)
     return;
   init3(els.messages);
+  loadFromQuery();
   loadFromStorage();
   if (state2.email) {
     showBadge();

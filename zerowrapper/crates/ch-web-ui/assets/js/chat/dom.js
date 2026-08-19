@@ -11,6 +11,7 @@ export function init() {
   els.authSection = document.getElementById('auth-section')
   els.userBadge = document.getElementById('user-badge')
   els.badgeDisplay = document.getElementById('badge-display')
+  els.badgeSub = document.getElementById('badge-sub')
   els.registerBtn = document.getElementById('register-btn')
   els.emailInput = document.getElementById('email-input')
   els.authError = document.getElementById('auth-error')

@@ -171,9 +171,11 @@ pub async fn handle_ws_connection(
         let content = parsed.get("content")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let role = parsed.get("role")
-            .and_then(|v| v.as_str())
-            .unwrap_or("public");
+        let role = parsed.get("roles")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|r| r.as_str()).collect::<Vec<_>>().join(","))
+            .or_else(|| parsed.get("role").and_then(|v| v.as_str()).map(str::to_string))
+            .unwrap_or_else(|| "public".to_string());
 
         let attachments = parsed.get("attachments")
             .and_then(|v| v.as_array())

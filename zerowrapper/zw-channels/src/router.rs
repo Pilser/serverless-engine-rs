@@ -22,12 +22,7 @@ fn sanitize_key(raw: &str) -> String {
         .collect()
 }
 
-pub fn build_session_id(channel: &str, agent_alias: &str, user_id: &str, role: &str) -> String {
-    if role == "public" || role.is_empty() {
-        let key = format!("{}.{}.{}", channel, agent_alias, user_id);
-        sanitize_key(&key)
-    } else {
-        let key = format!("{}.{}.{}.{}", channel, agent_alias, user_id, role);
-        sanitize_key(&key)
-    }
+pub fn build_session_id(channel: &str, agent_alias: &str, user_id: &str, _role: &str) -> String {
+    let key = format!("{}.{}.{}", channel, agent_alias, user_id);
+    sanitize_key(&key)
 }

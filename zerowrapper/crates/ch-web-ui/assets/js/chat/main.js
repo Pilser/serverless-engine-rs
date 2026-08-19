@@ -33,6 +33,7 @@ export function init() {
 
   lightbox.init(els.messages)
 
+  auth.loadFromQuery()
   auth.loadFromStorage()
 
   if (auth.state.email) {

@@ -118,7 +118,7 @@ async fn dispatch_api(cx: &Cx, api: &str, body: Body) -> Result<Response> {
 async fn api_history(cx: &Cx) -> Result<Response> {
     let app: &AppContext = app_context(cx);
     let user_id = query_value(cx, "user_id").map(|v| url_decode(&v)).unwrap_or_default();
-    let role = query_value(cx, "role").map(|v| url_decode(&v)).unwrap_or_else(|| "public".to_string());
+    let _role = query_value(cx, "role").map(|v| url_decode(&v)).unwrap_or_else(|| "public".to_string());
 
     if user_id.is_empty() {
         return Ok(Response::builder()
@@ -128,11 +128,7 @@ async fn api_history(cx: &Cx) -> Result<Response> {
             .unwrap());
     }
 
-    let session_id = if role == "public" || role.is_empty() {
-        format!("web.{}.{}", app.agent, sanitize_key(&user_id))
-    } else {
-        format!("web.{}.{}.{}", app.agent, sanitize_key(&user_id), sanitize_key(&role))
-    };
+    let session_id = format!("web.{}.{}", app.agent, sanitize_key(&user_id));
 
     match app.zeroclaw.get_session_messages(session_id.clone(), Some(100)).await {
         Ok(result) => Ok(Response::builder()

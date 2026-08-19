@@ -42,6 +42,7 @@ pub async fn chat_section(cx: &Cx) -> Result {
                 <div id="user-badge" class="hidden flex items-center gap-2 mt-4 px-3 py-1.5 rounded-lg" style="border: 1px solid var(--color-border-weak); background: var(--color-bg-weak);">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-weak)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                     <span id="badge-display" class="text-xs flex-1" style="color: var(--color-text-strong);"></span>
+                    <span id="badge-sub" class="text-xs" style="color: var(--color-text-weak);"></span>
                     <button id="logout-btn" class="text-xs px-2 py-0.5 rounded cursor-pointer transition" style="color: var(--color-text-weak); border: 1px solid var(--color-border-weak); background: transparent;">"Logout"</button>
                 </div>
                 <div style="padding: 8px 16px 4px;">

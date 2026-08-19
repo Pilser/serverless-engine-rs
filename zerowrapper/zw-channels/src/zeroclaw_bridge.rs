@@ -123,14 +123,14 @@ impl ZeroClawBridge {
         Ok(conn)
     }
 
-    async fn format_prompt(&self, user_id: &str, channel: &str, role: &str, attachments: &[zw_core::Attachment], prompt: &str) -> String {
-        let customer = user_id;
-        let key = if role == "admin" || role == "owner" { "owner" } else { "customer" };
+    async fn format_prompt(&self, _user_id: &str, channel: &str, role: &str, attachments: &[zw_core::Attachment], prompt: &str) -> String {
+        // Roles arrive as a comma-separated list (from the engine profiles
+        // table); present them to the agent as an array. No owner/customer key.
+        let roles: Vec<&str> = role.split(',').map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
         let mut envelope = serde_json::json!({
-            (key): customer,
             "message": prompt,
             "channel": channel,
-            "role": role,
+            "roles": roles,
         });
         if !attachments.is_empty() {
             let attach: Vec<serde_json::Value> = attachments.iter().map(|a| {

@@ -1,3 +1,4 @@
+pub mod ai_proxy;
 pub mod rest;
 pub mod rest_admin;
 pub mod rest_auth;

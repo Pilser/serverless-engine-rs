@@ -185,6 +185,34 @@ pub async fn handle(
         return Ok(cors_response());
     }
 
+    // AI assistant chat: the embedded AI app opens a WebSocket to the same
+    // origin — board-scoped at /srv/<board>/ai/ws, or the legacy root /ws.
+    // Tunnel the upgrade to the board's AI service.
+    if method == Method::GET {
+        let upgrade = headers
+            .get("upgrade")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.eq_ignore_ascii_case("websocket"))
+            .unwrap_or(false);
+        if upgrade {
+            if path == "/ws" {
+                let engine = server.engine.clone();
+                return Ok(crate::transport::ai_proxy::ws_proxy(&engine, None, req, "ws").await);
+            }
+            if let Some(tail) = path.strip_prefix("/srv/") {
+                let parts: Vec<&str> = tail.split('/').collect();
+                if parts.len() >= 3 && parts[1] == "ai" {
+                    let board = parts[0].to_string();
+                    let rest = parts[2..].join("/");
+                    let engine = server.engine.clone();
+                    return Ok(
+                        crate::transport::ai_proxy::ws_proxy(&engine, Some(&board), req, &rest).await,
+                    );
+                }
+            }
+        }
+    }
+
     let mut body_bytes = Bytes::new();
     if matches!(method, Method::POST | Method::PUT | Method::PATCH) {
         body_bytes = match req.collect().await {
@@ -195,6 +223,28 @@ pub async fn handle(
 
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let params = query_params(&uri);
+
+    // AI assistant: proxy /srv/<board>/ai/<rest> to the board's AI frontend
+    // service (AI_BASE_URL secret, fallback SRV_AI_TARGET) so the app can
+    // embed it same-origin. Forwards any method; HTML/JS rewritten, the rest
+    // streams through (SSE, binaries).
+    if segs.len() >= 3 && segs[0] == "srv" && segs[2] == "ai" {
+        let board = segs[1].to_string();
+        let rest = segs[3..].join("/");
+        let qs = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
+        let engine = server.engine.clone();
+        let proxied = crate::transport::ai_proxy::http_proxy(
+            &engine,
+            &board,
+            &method,
+            &rest,
+            &qs,
+            &headers,
+            &body_bytes,
+        )
+        .await;
+        return Ok(proxied);
+    }
 
     if method == Method::GET
         && segs.len() >= 2

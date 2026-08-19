@@ -29,8 +29,10 @@ serverless-engine/
     CONTINUATION_GUIDE.md      # THIS FILE (living status)
     compare_counts.py          # source vs engine row counts
     config.py / extract.py / transform.py / loader.py / migrate.py
+    dump_storage.py               # dump storage.objects -> data/storage/ -> engine /upload
     data/raw/                  # 176 local source dumps (+ _users.json, the 10 auth users)
     data/transformed/          # loader input
+    data/storage/              # recovered storage files (5/68 — see §4.6)
   docs/
     blocking-client-async-runtime.md   # §8: daemon resource-bound fixes (READ THIS)
     problems/recipe-writeback-drops-computed-fields.md  # recipe write-back saga (RESOLVED)
@@ -198,6 +200,48 @@ The SQL triggers below still need recipe ports (each verified with a live test):
       (or SRV_PUBLIC_URL + the callback path). Also note jsonwebtoken dep added
       to the workspace.
 
+### Phase 4.6 — Storage files migration (2026-08-19)
+- **Source reality:** the source Supabase storage volume is EMPTY (only a
+  `stub` dir at `/home/iico/alheb-server/supabase/docker/volumes/storage`).
+  `storage.objects` in Postgres holds only metadata (jsonb — no bytea). The
+  bytes for 63 of 68 objects are LOST at the origin; the only surviving copies
+  are in the Cloudflare edge cache in front of `sised.sc.ug`, which serves them
+  intermittently (round-robin between two replicas — retry until 200).
+- **Recovered (5/68, ~3.2 MB)** in `tools/migrate_iico/data/storage/`:
+  - `signatures/director-1784400050193.png` (school logo)
+  - `signatures/stamp-enhanced.png` (school stamp)
+  - `signatures/695960b1-c66c-4f20-b128-be62963ea8c4/1784405232808.png` (head-teacher signature)
+  - `signatures/20803635-b3d0-4e69-b1f7-a06194d8fe64/1782990536106.png` (user signature)
+  - `documents/learner-photos/9d5c7500-…-1785586765592.jpg` (learner photo)
+  The 63 missing ones are gone — do NOT re-attempt (see §7 gotcha).
+- **Imported into engine** (blobs under `<board>/files/*.bin` in
+  `deploy/helix-iico-data/objects`, records in `signatures`/`documents` tables)
+  via `python3 dump_storage.py --push-only` (POST `/upload?table=<bucket>`,
+  `X-Filename` RAW — not URL-encoded — so `/file` name-lookup matches).
+  Record `type` fields patched to `image/png`/`image/jpeg`.
+- **site_settings rewired** (`id_card_settings`, seq 11): `school_logo_url`,
+  `head_teacher_signature_url`, `school_stamp_url` now point at the engine
+  `/api/srv/<board>/file?table=signatures&file=<path>` (verified 200 +
+  `image/png`). NOTE: the REST PATCH deep-merges the top level but REPLACES a
+  nested object wholesale — always re-send the whole `value` object.
+- **All absolute source URLs rewritten** in engine DB via
+  `tools/migrate_iico/rewrite_storage_urls.py --apply` (22 rows):
+  `user_signatures.image_url` (3), `store_orders.applicant_signature_url` /
+  `director_signature_url` (11), `print_orders.file_url` (3), `learners.photo_url`
+  (1), `staff_letters.body` (3 embedded HTML), plus the site_settings value.
+  Every `https://<host>/supabase/storage/v1/object/public/<bucket>/<path>` →
+  `/api/srv/<board>/file?table=<bucket>&file=<urlencoded path>`. Rows now point
+  at where the bytes WILL live on the board object store — 3 of the 22 already
+  serve (200); the rest 404 until bytes are pushed under those exact names.
+  Log-in page logo is unaffected (static `/icon-512x512.png` on the board, 200).
+- **Login-page logo** is `/icon-512x512.png` (static asset already on the
+  board, serves 200 `image/png`) — the earlier "not showing" was browser cache;
+  the site_settings URLs above were the real breakage.
+- **To serve a recovered file later:** copy the bytes into
+  `data/storage/<bucket>/<path>` and `python3 dump_storage.py --push-only` —
+  the existing `name` in each record matches, so `/file` resolves immediately
+  (no URL changes needed).
+
 ### Phase 5 — graph optimization (future)
 - Graph-based stock: derive quantity by traversing `RELATED_ITEM` edges instead
   of the `inventory_stock` counter. **Blocked on:** `graph_resolve_target` needs
@@ -265,6 +309,17 @@ cargo build --release    # from workspace root, no -p; never cargo test/clean
   this; the REST PATCH/DELETE take numeric seq).
 - Known source orphans (assets.category_id→inventory_categories; 7
   in_app_notifications.user_id) — verified, do NOT re-extract.
+- **Source storage bytes are LOST** — only the 5 files in
+  `data/storage/` survived (edge cache). Any table row whose payload embeds a
+  `https://sised.sc.ug/supabase/storage/...` URL to one of the other 63 objects
+  cannot be recovered; the frontend renders those as broken images. New uploads
+  via the facade (`storage.from(bucket).upload` → `/upload`) work fine.
+- **Facade upload note:** `storage.getPublicUrl` re-encodes the path in the
+  `/file?file=` query param, so the engine must store `name` RAW. The facade
+  still sends `X-Filename: encodeURIComponent(path)` — for paths containing `/`
+  (e.g. `learner-gallery/uuid/…`) the name lookup then fails (falls back to a
+  non-existent blob key → 404). Fix pending: send `X-Filename` unencoded in
+  `src/integrations/supabase/client.ts`.
 
 ---
 

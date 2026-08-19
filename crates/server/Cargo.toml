@@ -18,7 +18,7 @@ rand = { workspace = true }
 uuid = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
 tracing = { workspace = true }
-reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "http2", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "http2", "rustls", "stream"] }
 tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", features = ["sink"] }
 

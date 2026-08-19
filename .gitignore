@@ -28,6 +28,12 @@
 !tools/migrate_iico/
 !tools/migrate_iico/**
 
+# Allow the embedded zerowrapper project (all of it except target/ + deploy binary)
+!zerowrapper/
+!zerowrapper/**
+zerowrapper/target/
+zerowrapper/deploy/DEPLOY-ALHEIB-AI/zw
+
 # --- Still ignore build artifacts, runtime data and secrets (inside allowed dirs) ---
 target/
 **/target/
@@ -61,3 +67,6 @@ __pycache__/
 .env
 tools/migrate_iico/data/done.json
 tools/migrate_iico/data/storage/
+
+# jerboa.env is the deploy config for the Jerboa site — track it
+!zerowrapper/deploy/DEPLOY-ALHEIB-AI/jerboa.env

@@ -13,12 +13,12 @@ pub struct Client {
 impl Client {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let base = base_url.into().trim_end_matches('/').to_string();
-        // Disable keep-alive: under sustained sequential loads (graph sync,
-        // bulk migration) reqwest can reuse a connection Helix has closed,
-        // producing "error sending request" transport errors. A fresh
-        // connection per request is slower but reliable.
+        // Keep-alive enabled: the daemon runs blocking calls on the tokio
+        // blocking pool (spawn_blocking), so reusing a connection per host is
+        // safe and avoids a TCP handshake + TLS per request (which made
+        // dashboard bursts slow). reqwest re-establishes on server close.
         let http = reqwest::blocking::Client::builder()
-            .pool_max_idle_per_host(0)
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(Error::Http)?;
         Ok(Self { base, http, timeout_ms: 30_000 })

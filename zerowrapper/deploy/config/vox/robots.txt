@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://vox-ai.pilserlabs.com/sitemap-index.xml

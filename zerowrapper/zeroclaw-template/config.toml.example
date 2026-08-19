@@ -1,0 +1,164 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ZeroClaw config.toml template (schema_version = 3)
+#
+# This is the config for the *zeroclaw daemon* that `zw` (zerowrapper) talks to
+# over a Unix socket. It does NOT configure zerowrapper itself.
+#
+# How this file is picked up (resolution order):
+#   1.  global CLI flag   :  zeroclaw --config-dir <dir> daemon
+#   2.  env var           :  ZEROCLAW_CONFIG_DIR=<dir> zeroclaw daemon
+#   3.  default           :  ~/.zeroclaw/config.toml
+#
+# The daemon writes its Unix socket to:
+#     $ZEROCLAW_SOCKET                        (env override)
+#     <config-dir>/data/daemon.sock           (default)
+# Point `zw`'s `zerowrapper.zeroclaw_socket` at that path.
+#
+# Run `./setup.sh <target-dir>` to scaffold a real instance from this template.
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version = 3
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODEL PROVIDERS  —  [providers.models.<type>.<alias>]
+# <type>  = canonical family slot (openai, anthropic, ollama, custom, ...)
+# <alias> = your operator-assigned instance name (pick any name)
+#
+# An agent references one of these via  agents.<alias>.model_provider = "<type>.<alias>"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Local Ollama (no API key needed — it's an endpoint, not a credential)
+[providers.models.ollama.local]
+model = "llama3.2"
+uri = "http://127.0.0.1:11434"
+temperature = 0.7
+
+# OpenAI-compatible / custom gateway (set your key via env to avoid committing it)
+[providers.models.custom.primary]
+model = "your-model-id"
+uri = "http://127.0.0.1:8080/v1"
+api_key = "${OPENAI_API_KEY}"   # ${VAR} is expanded from the environment at load time
+temperature = 0.7
+
+# Anthropic (Console API key)
+# [providers.models.anthropic.main]
+# model = "claude-sonnet-4-5"
+# api_key = "${ANTHROPIC_API_KEY}"
+
+# OpenAI (API key)
+# [providers.models.openai.main]
+# model = "gpt-5.4"
+# api_key = "${OPENAI_API_KEY}"
+# wire_api = "responses"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISK PROFILES  —  [risk_profiles.<alias>]
+# Gates what the agent may do autonomously. The `yolo`-style profile runs every
+# tool without approval; the default posture is "supervised" (medium-risk ops
+# ask first, high-risk is blocked). See docs/book/src/security/overview.md.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[risk_profiles.default]
+# autonomy level: supervised (default) | full (no approval prompts) | ...
+# level = "supervised"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RUNTIME PROFILES  —  [runtime_profiles.<alias>]
+# Agentic / iteration tuning. An empty table uses every built-in default.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[runtime_profiles.default]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENTS  —  [agents.<alias>]
+# Each agent binds a model provider + risk profile + runtime profile, and is
+# granted MCP servers through its `mcp_bundles` list (omission = no MCP tools).
+#
+# The per-agent workspace lives at  <config-dir>/agents/<alias>/workspace/  and
+# holds the agent's memory docs: MEMORY.md, IDENTITY.md, SOUL.md. Override with
+# the `[agents.<alias>.workspace] path` below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[agents.craw]
+enabled = true
+model_provider = "custom.primary"
+risk_profile = "default"
+runtime_profile = "default"
+# MCP server bundles granted to this agent (defined below)
+mcp_bundles = ["core"]
+
+[agents.craw.workspace]
+# path = "/absolute/path/to/agents/craw/workspace"   # optional per-agent override
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY  —  [memory]  +  [storage.<backend>.<alias>]
+# `memory.backend` selects which storage instance holds conversation + core
+# memory. SQLite db path defaults to <workspace_dir>/brain.db; Markdown memory
+# defaults to <workspace_dir>/memory/.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[memory]
+backend = "sqlite.default"     # "sqlite.default" | "markdown.default" | "none"
+auto_save = true
+embedding_provider = "none"    # "none" (keyword-only) | "openai" | "custom:URL"
+
+[storage.sqlite.default]
+# path = "/absolute/path/to/data/brain.db"   # default: <workspace>/brain.db
+
+# Markdown directory storage (alternative to sqlite)
+# [storage.markdown.default]
+# directory = "/absolute/path/to/agents/craw/workspace/memory"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP  —  [mcp] + [[mcp.servers]] + [mcp_bundles.<alias>]
+# Servers are only *defined* here; an agent is granted them via mcp_bundles.
+# Transports: stdio (command+args), http (url), sse (url).
+# ─────────────────────────────────────────────────────────────────────────────
+
+[mcp]
+enabled = true
+deferred_loading = false
+
+# MCP stdio server (Node-based example — needs `npx` installed)
+[[mcp.servers]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+tool_timeout_secs = 60
+
+# MCP HTTP server (remote)
+# [[mcp.servers]]
+# name = "remote"
+# transport = "http"
+# url = "https://mcp.example.com/sse"
+
+# Bundle that the `craw` agent uses (agent.mcp_bundles = ["core"])
+[mcp_bundles.core]
+servers = ["filesystem"]
+# exclude = ["some_server"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATEWAY  —  [gateway]
+# HTTP/WebSocket API + web dashboard. The daemon listens here. Default port is
+# 42617, default host is 127.0.0.1 (local-only).
+#
+# web_dist_dir = absolute path to a built zeroclaw web dashboard (web/dist).
+# If unset, the gateway auto-detects ./web/dist next to the binary or CWD.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[gateway]
+port = 42617
+host = "127.0.0.1"
+allow_public_bind = false
+require_pairing = true
+# web_dist_dir = "/absolute/path/to/zeroclaw/web/dist"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COST  —  [cost]  (optional budget enforcement)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# [cost]
+# enabled = true
+# daily_limit_usd = 10.0
+# monthly_limit_usd = 100.0

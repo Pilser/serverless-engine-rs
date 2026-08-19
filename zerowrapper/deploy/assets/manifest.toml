@@ -1,0 +1,19 @@
+version = 1
+
+[[assets]]
+id = 13777018800423370467
+file = "app-4ce0d682e7cc2b7f.js"
+hash = "4ce0d682e7cc2b7fe10572bfe8e877256871f4e759b82a6b161c11d75f9c022d"
+content_type = "text/javascript"
+
+[[assets]]
+id = 16904518726368255834
+file = "tailwind-446b4c5de568b3f1.css"
+hash = "446b4c5de568b3f150546a84c203e2129193142e8c9bc6439f00f437a94a7348"
+content_type = "text/css"
+
+[[assets]]
+id = 7510576945472531355
+file = "public-wb-a8f18c7b619bf3c6.js"
+hash = "a8f18c7b619bf3c688bf12769df369bb8555ddb7ceadf52eceeedbcdc6eedd4e"
+content_type = "text/javascript"

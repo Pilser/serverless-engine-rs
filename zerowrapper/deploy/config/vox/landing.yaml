@@ -1,0 +1,44 @@
+hero:
+  title: "Vox Lounge"
+  subtitle: "Two Branches — Makindye & Nansana"
+  description: >
+    Vox Lounge is a corporate night spot in the heart of Makindye (Mobutu Road) and
+    a lively hangout in Nansana — serving quality drinks, eats, live band, comedy and
+    theme nights every week. Ask our assistant anything about our branches, events,
+    theme nights and reservations.
+  business_url: "https://vox-ai.pilserlabs.com"
+  local_fallback: true
+  fallback: "Backend not connected. Please refresh or wait."
+
+examples:
+  - query: "Where are Vox Lounge branches located?"
+    response: "We have two branches: Vox Lounge Makindye on Mobutu Road in the heart of Makindye, Kampala, and Vox Lounge Nansana — a hangout spot with kitchen & bar in Nansana."
+  - query: "What theme nights do you have?"
+    response: "Monday is our Candle Night, Wednesday is Comedy Night, and Sundays feature our live Vox Band — at both branches. Ask for the full weekly programme!"
+  - query: "How can I book a table or venue?"
+    response: "Reach us on +256 755 255555 for Makindye or +256 747 190079 for Nansana. We host private events, parties and comedy shows."
+  - query: "Do you have food and drinks?"
+    response: "Yes — both branches have a full kitchen & bar with a variety of drinks, eats and music. Makindye is a spacious venue that can host over 600 guests."
+
+faq:
+  - q: "Where is Vox Lounge Makindye?"
+    a: "In the heart of Makindye along Mobutu Road, Kampala. It is a corporate and improved night spot offering quality service, great sound, live band and plenty of space (over 600 guests)."
+  - q: "Where is Vox Lounge Nansana?"
+    a: "Our Nansana branch is a hangout spot in Nansana with a kitchen & bar, theme nights, comedy and party venue facilities. Contact +256 747 190079."
+  - q: "What happens on which night?"
+    a: "Monday is Candle Night, Wednesday is Comedy Night with different comedians, and Sunday is Live Band with the Vox Band. Thursday often features guest artists live with the Vox Band."
+  - q: "Can you watch sports there?"
+    a: "Yes — Vox Lounge Makindye is a popular sports bar, packed with football fans during the English Premier League and Champions League matches."
+  - q: "Can I host a party or event?"
+    a: "Absolutely. Both branches are party and event venues — comedy shows, birthday parties, corporate events and more. Call us to reserve."
+  - q: "How do I contact you?"
+    a: "Makindye: +256 755 255555. Nansana: +256 747 190079. Follow us on social media for upcoming events and theme nights."
+
+about:
+  heading: "Vox Lounge — Makindye & Nansana"
+  text: >
+    Vox Lounge brings together two vibrant branches: a corporate and improved
+    night spot in the heart of Makindye and a lively hangout in Nansana.
+    From candle nights and comedy shows to live Vox Band performances and
+    sports screenings, we serve quality drinks, eats and unforgettable vibes
+    every week of the year.

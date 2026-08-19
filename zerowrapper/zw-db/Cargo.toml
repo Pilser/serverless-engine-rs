@@ -1,0 +1,27 @@
+[package]
+name = "zw-db"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+turso = { workspace = true }
+zw-core = { path = "../zw-core" }
+zw-expr = { path = "../zw-expr" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+bcrypt = "0.16"
+jsonschema = { version = "0.49.6", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+zw-recipe = { path = "../zw-recipe" }
+zw-materials = { path = "../zw-materials" }

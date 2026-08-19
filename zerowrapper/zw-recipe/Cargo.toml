@@ -1,0 +1,17 @@
+[package]
+name = "zw-recipe"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+zw-core = { path = "../zw-core" }
+zw-db = { path = "../zw-db" }
+zw-expr = { path = "../zw-expr" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }

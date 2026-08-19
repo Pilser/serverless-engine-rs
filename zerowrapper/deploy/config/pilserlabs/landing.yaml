@@ -1,0 +1,33 @@
+hero:
+  title: "PilserLab"
+  subtitle: "AI Aness Agents from Rust"
+  description: >
+    We build high-performance, memory-safe AI agents using Rust.
+    The web UI connects to your local backend via WebSocket—
+    no cloud dependency.
+  business_url: "https://www.pilserlabs.com"
+  local_fallback: true
+  fallback: "Backend not connected. Start the server to enable chat."
+
+examples:
+  - query: "What is PilserLab?"
+    response: "PilserLab creates AI aness agents from Rust—combining LLM intelligence with Rust's performance and memory safety for resource-efficient deployments."
+  - query: "Show me an image"
+    response: "I can render images, videos, PDFs, and more from your local filesystem. Try: show me /path/to/photo.jpg"
+  - query: "What makes this different?"
+    response: "Every agent runs with zero-cost abstractions, no garbage collection, and full control over memory—Rust's promise, delivered."
+
+faq:
+  - q: "Why Rust for AI agents?"
+    a: "Memory safety without GC, native performance, and the ability to run on constrained hardware make Rust ideal for production AI agent workloads."
+  - q: "Can I run this locally?"
+    a: "Yes. The entire system runs on your machine. The web UI connects to your local backend via WebSocket."
+  - q: "What can these agents do?"
+    a: "Our agents can reason, browse files, execute commands, and interact with APIs—all coordinated through a multi-agent orchestration layer written in Rust."
+
+about:
+  heading: "Built with Rust"
+  text: >
+    PilserLab specializes in AI aness agents powered by Rust.
+    Our agents run efficiently on minimal hardware while delivering
+    intelligence through multi-agent orchestration.

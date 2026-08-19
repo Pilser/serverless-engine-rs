@@ -1,0 +1,26 @@
+name: ${INSTANCE_NAME}
+services:
+  zw:
+    image: debian:bookworm-slim
+    container_name: zw-${INSTANCE_NAME}
+    user: "1000:1000"
+    environment:
+      ZEROWRAPPER__ZEROCLAW_SOCKET: ${ZEROWRAPPER__ZEROCLAW_SOCKET}
+      ZEROWRAPPER__DB_PATH: ${ZEROWRAPPER__DB_PATH}
+      ZEROWRAPPER__CACHE_DIR: ${ZEROWRAPPER__CACHE_DIR}
+      ZEROWRAPPER__MCP_TOKEN: ${ZEROWRAPPER_MCP_TOKEN}
+      ZEROWRAPPER_CH_WEB__BIND: ${ZEROWRAPPER_CH_WEB__BIND}
+      ZEROWRAPPER_CH_WEB__AGENT: ${ZEROWRAPPER_CH_WEB__AGENT}
+      TOPCOAT_ASSETS_DIR: ${TOPCOAT_ASSETS_DIR}
+      AGENTS_DIR: ${AGENTS_DIR}
+    ports:
+      - "${HOST_PORT}:9090"
+    volumes:
+      - ${ZW_BIN}:/usr/local/bin/zw:ro
+      - ${BUNDLE_DIR}:/app/bundle:ro
+      - ${DATA_DIR}:${DATA_DIR}
+      - ${SOCKET_DIR}:${SOCKET_DIR}
+      - ${AGENTS_DIR}:${AGENTS_DIR}:rw
+    working_dir: /app
+    command: zw
+    restart: always

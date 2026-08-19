@@ -1,0 +1,30 @@
+[zerowrapper]
+# Unix socket path for zeroclaw daemon
+zeroclaw_socket = "/tmp/.zeroclaw/daemon.sock"
+# Path to local turso/SQLite database file
+db_path = "./data/zerowrapper.db"
+# Directory for content-addressed cache
+cache_dir = "./data/cache"
+
+# Web channel — each channel has its own agent
+[zerowrapper.ch_web]
+bind = "0.0.0.0:9090"
+allowed_origins = ["*"]
+# Which zeroclaw agent this channel sends prompts to
+agent = "craw"
+# Path to built frontend dist (Astro build output: web/dist/)
+dist_path = "./web/dist"
+# Directory for file uploads (also settable via ZEROWRAPPER_CH_WEB__UPLOAD_DIR)
+upload_dir = "./data/uploads"
+
+# Pre-configured admin/owner accounts
+[zerowrapper.ch_web.accounts]
+"256757337153" = { role = "owner", password = "admin123" }
+# "256700000000" = { role = "admin", password = "admin456" }
+
+# MCP discovery — how zeroclaw should spawn us (optional)
+# If missing, a warning is logged with configuration guidance
+# [zerowrapper.mcp]
+# server_name = "zeroRapper"
+# command = "/path/to/zw"
+# transport = "stdio"

@@ -1,0 +1,39 @@
+site:
+  title: "Vox Lounge — Makindye & Nansana"
+  brand: "Vox Lounge"
+  url: "https://vox-ai.pilserlabs.com"
+  local_url: "https://vox-ai.pilserlabs.com"
+  tagline: "Drinks, Eats & Music"
+  description: "Official AI assistant for Vox Lounge. Two branches — Makindye on Mobutu Road and Nansana. Live band, comedy nights, candle nights, kitchen & bar, parties and events."
+  logo: "/logo.svg"
+  favicon: "/favicon.svg"
+
+footer:
+  text: "© Vox Lounge — Makindye & Nansana"
+  links:
+    - label: "Makindye: +256 755 255555"
+      url: "tel:+256755255555"
+    - label: "Nansana: +256 747 190079"
+      url: "tel:+256747190079"
+    - label: "vox-ai.pilserlabs.com"
+      url: "https://vox-ai.pilserlabs.com"
+
+business:
+  name: "Vox Lounge"
+  type: "BarOrPub"
+  description: "Night lounge with two branches in Kampala — Makindye and Nansana. Live band, comedy nights, candle nights, kitchen & bar, parties and events."
+  image: "/favicon.svg"
+  telephone: "+256755255555"
+  branches:
+    - name: "Vox Lounge Makindye"
+      address: "Mobutu Road, Makindye, Kampala, Uganda"
+      telephone: "+256755255555"
+      hours: "Mo-Su 00:00-24:00"
+      latitude: 0.288123
+      longitude: 32.5781
+      url: "https://vox-ai.pilserlabs.com"
+    - name: "Vox Lounge Nansana"
+      address: "Nansana, Kampala, Uganda"
+      telephone: "+256747190079"
+      hours: "Mo-Su 00:00-24:00"
+      url: "https://vox-ai.pilserlabs.com"

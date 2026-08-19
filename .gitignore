@@ -32,7 +32,9 @@
 !zerowrapper/
 !zerowrapper/**
 zerowrapper/target/
+# the zw release binaries (DEPLOY-ALHEIB-AI/zw + legacy deploy/zw)
 zerowrapper/deploy/DEPLOY-ALHEIB-AI/zw
+zerowrapper/deploy/zw
 
 # --- Still ignore build artifacts, runtime data and secrets (inside allowed dirs) ---
 target/
@@ -70,3 +72,6 @@ tools/migrate_iico/data/storage/
 
 # jerboa.env is the deploy config for the Jerboa site — track it
 !zerowrapper/deploy/DEPLOY-ALHEIB-AI/jerboa.env
+
+# stray photos
+zerowrapper/*.jpg

@@ -1,0 +1,15 @@
+[package]
+name = "zw-whiteboard"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+zw-cache = { path = "../zw-cache" }
+zw-db = { path = "../zw-db" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+mime_guess = { workspace = true }

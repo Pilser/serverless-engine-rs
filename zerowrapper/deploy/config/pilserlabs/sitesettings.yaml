@@ -1,0 +1,24 @@
+site:
+  title: "PilserLab — AI Aness Agents"
+  brand: "PilserLab"
+  url: "https://ai.pilserlabs.com"
+  local_url: "https://ai.pilserlabs.com"
+  tagline: "AI Aness Agents from Rust"
+  description: "PilserLab builds high-performance, memory-safe AI agents using Rust."
+  logo: "/logo.svg"
+  favicon: "/favicon.svg"
+
+footer:
+  text: "© PilserLab — built with Rust"
+  links:
+    - label: "pilserlabs.com"
+      url: "https://www.pilserlabs.com"
+    - label: "GitHub"
+      url: "https://github.com/pilser"
+
+business:
+  name: "PilserLab"
+  type: "ProfessionalService"
+  description: "PilserLab builds high-performance, memory-safe AI agents using Rust."
+  image: "/favicon.svg"
+  telephone: "+256755304241"

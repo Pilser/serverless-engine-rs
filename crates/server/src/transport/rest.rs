@@ -236,7 +236,7 @@ pub async fn handle(
     // Host health for the frontend's "School VPS Node" widget (no board scope).
     // GET /api/system/health -> {cpuLoad, ramUsage, storageFree, dbStatus, lanAccess}
     if method == Method::GET && segs.len() == 3 && segs[0] == "api" && segs[1] == "system" && segs[2] == "health" {
-        let h = system_health();
+        let h = system_health(&server);
         let body = Full::new(Bytes::from(h))
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
         return Ok(with_cors(
@@ -795,22 +795,53 @@ fn events_inbound(
 }
 
 /// Host-level health for the frontend "School VPS Node" widget. Reads the
-/// daemon's host (/proc) plus local disk, no engine lock needed.
-fn system_health() -> String {
+/// daemon's host (/proc), the daemon's own CPU (Obs), and does a quick DB
+/// round-trip to report engine/Helix health. No long locks.
+fn system_health(server: &Server) -> String {
     let (cpu, ram_gb, _total_ram_gb) = host_cpu_ram();
     let storage_free = disk_free_gb("/");
+    // Daemon health: try to take the engine lock (bounded wait) + a fast Helix
+    // count. Only report unhealthy if the lock is stuck beyond the bound.
+    let (db_status, daemon_ok) = {
+        let started = std::time::Instant::now();
+        let mut guard = None;
+        while guard.is_none() && started.elapsed() < std::time::Duration::from_millis(500) {
+            guard = server.engine.try_lock().ok();
+            if guard.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        if let Some(guard) = guard {
+            let board = guard
+                .list_tables("b_7z5lr8zaurkd0000")
+                .map(|t| t.len())
+                .unwrap_or(0);
+            let took = started.elapsed().as_millis();
+            drop(guard);
+            (format!("Connected ({board} tables, {took}ms)"), true)
+        } else {
+            ("Daemon busy (engine lock held >500ms)".to_string(), false)
+        }
+    };
+    let daemon_cpu = (server.obs.cpu_percent() * 100.0).round() / 100.0;
     let body = serde_json::json!({
         "cpuLoad": format!("{cpu:.1}"),
         "ramUsage": format!("{ram_gb:.2}"),
         "storageFree": format!("{storage_free:.1}"),
-        "dbStatus": "Connected",
-        "lanAccess": "Active",
+        "dbStatus": db_status,
+        "lanAccess": if daemon_ok { "Active" } else { "Degraded" },
+        "daemon": {
+            "cpu": daemon_cpu,
+            "inFlight": server.obs.in_flight(),
+            "requests": server.obs.total(),
+            "healthy": daemon_ok,
+        },
     });
     body.to_string()
 }
 
 fn host_cpu_ram() -> (f64, f64, f64) {
-    // CPU: 1 - idle/total from /proc/stat over a short sample.
+    // CPU: 1 - idle/total from /proc/stat over two samples ~250ms apart.
     fn proc_cpu() -> Option<(u64, u64)> {
         let s = std::fs::read_to_string("/proc/stat").ok()?;
         let line = s.lines().find(|l| l.starts_with("cpu "))?;
@@ -822,13 +853,17 @@ fn host_cpu_ram() -> (f64, f64, f64) {
         let total: u64 = parts.iter().sum();
         Some((idle, total))
     }
-    let cpu = match (proc_cpu(), proc_cpu()) {
-        (Some((i1, t1)), Some((i2, t2))) if t2 > t1 => {
-            let idle = i2.saturating_sub(i1) as f64;
-            let total = (t2 - t1) as f64;
-            ((1.0 - idle / total) * 100.0).max(0.0).min(100.0)
+    let cpu = {
+        let s1 = proc_cpu();
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        match (s1, proc_cpu()) {
+            (Some((i1, t1)), Some((i2, t2))) if t2 > t1 => {
+                let idle = i2.saturating_sub(i1) as f64;
+                let total = (t2 - t1) as f64;
+                ((1.0 - idle / total) * 100.0).max(0.0).min(100.0)
+            }
+            _ => 0.0,
         }
-        _ => 0.0,
     };
     // RAM from /proc/meminfo (MemTotal, MemAvailable) in GB.
     let mut total = 0u64;

@@ -233,6 +233,22 @@ pub async fn handle(
         }
     }
 
+    // Host health for the frontend's "School VPS Node" widget (no board scope).
+    // GET /api/system/health -> {cpuLoad, ramUsage, storageFree, dbStatus, lanAccess}
+    if method == Method::GET && segs.len() == 3 && segs[0] == "api" && segs[1] == "system" && segs[2] == "health" {
+        let h = system_health();
+        let body = Full::new(Bytes::from(h))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+        return Ok(with_cors(
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .header("cache-control", "no-cache")
+                .body(BoxBody::new(body))
+                .unwrap(),
+        ));
+    }
+
     // Same blocking-client constraint: dispatch the whole route (engine lock +
     // blocking Helix/HTTP) to the blocking thread pool.
     let server2 = server.clone();
@@ -776,4 +792,73 @@ fn events_inbound(
     }
     let _ = engine.dispatch_recipes(board, "inbound", EventKind::Inbound, None, Some(payload));
     ok_json(json!({ "ok": true }))
+}
+
+/// Host-level health for the frontend "School VPS Node" widget. Reads the
+/// daemon's host (/proc) plus local disk, no engine lock needed.
+fn system_health() -> String {
+    let (cpu, ram_gb, _total_ram_gb) = host_cpu_ram();
+    let storage_free = disk_free_gb("/");
+    let body = serde_json::json!({
+        "cpuLoad": format!("{cpu:.1}"),
+        "ramUsage": format!("{ram_gb:.2}"),
+        "storageFree": format!("{storage_free:.1}"),
+        "dbStatus": "Connected",
+        "lanAccess": "Active",
+    });
+    body.to_string()
+}
+
+fn host_cpu_ram() -> (f64, f64, f64) {
+    // CPU: 1 - idle/total from /proc/stat over a short sample.
+    fn proc_cpu() -> Option<(u64, u64)> {
+        let s = std::fs::read_to_string("/proc/stat").ok()?;
+        let line = s.lines().find(|l| l.starts_with("cpu "))?;
+        let parts: Vec<u64> = line.split_whitespace().skip(1).filter_map(|p| p.parse().ok()).collect();
+        if parts.len() < 4 {
+            return None;
+        }
+        let idle = parts.get(3).copied().unwrap_or(0) + parts.get(4).copied().unwrap_or(0);
+        let total: u64 = parts.iter().sum();
+        Some((idle, total))
+    }
+    let cpu = match (proc_cpu(), proc_cpu()) {
+        (Some((i1, t1)), Some((i2, t2))) if t2 > t1 => {
+            let idle = i2.saturating_sub(i1) as f64;
+            let total = (t2 - t1) as f64;
+            ((1.0 - idle / total) * 100.0).max(0.0).min(100.0)
+        }
+        _ => 0.0,
+    };
+    // RAM from /proc/meminfo (MemTotal, MemAvailable) in GB.
+    let mut total = 0u64;
+    let mut available = 0u64;
+    if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                total = rest.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                available = rest.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            }
+        }
+    }
+    let total_gb = total as f64 / (1024.0 * 1024.0);
+    let used_gb = (total.saturating_sub(available)) as f64 / (1024.0 * 1024.0);
+    (cpu, used_gb, total_gb)
+}
+
+fn disk_free_gb(path: &str) -> f64 {
+    // `df -P -B1 <path>` -> free bytes on the filesystem, cheap once per call.
+    if let Ok(out) = std::process::Command::new("df").args(["-P", "-B1", path]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(line) = text.lines().nth(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 4 {
+                if let Ok(avail) = fields[3].parse::<u64>() {
+                    return avail as f64 / (1024.0 * 1024.0 * 1024.0);
+                }
+            }
+        }
+    }
+    0.0
 }

@@ -182,6 +182,21 @@ The SQL triggers below still need recipe ports (each verified with a live test):
       Browser-verified: dashboard + Learners & Classes load in <1s, 0 errors.
 - [ ] Still stubbed: storage.remove; some RPCs (get_tailor_stats,
       tailor_materials_cost, etc.) return "not yet ported".
+- [x] Microsoft SSO (per-board, multi-tenant safe): config stored as BOARD
+      secrets (MICROSOFT_TENANT_ID / CLIENT_ID / CLIENT_SECRET via secrets.set),
+      NOT engine env. Engine endpoints:
+        GET /api/srv/<board>/auth/oauth/microsoft/start   -> 302 to Entra
+        GET /api/srv/<board>/auth/oauth/microsoft/callback -> code exchange,
+          RS256 id_token verify vs tenant JWKS, login/create by email,
+          redirect to app with ?srv_token=
+      Frontend: the Microsoft button redirects to /start; useAuth captures
+      ?srv_token= and restores the session.
+      VERIFIED: /start 302s to login.microsoftonline.com with the board's
+      client id; browser reaches the real Entra login page. TO COMPLETE: the
+      Entra app registration's redirect URI must be set to
+      http://<host>:7070/api/srv/b_7z5lr8zaurkd0000/auth/oauth/microsoft/callback
+      (or SRV_PUBLIC_URL + the callback path). Also note jsonwebtoken dep added
+      to the workspace.
 
 ### Phase 5 — graph optimization (future)
 - Graph-based stock: derive quantity by traversing `RELATED_ITEM` edges instead

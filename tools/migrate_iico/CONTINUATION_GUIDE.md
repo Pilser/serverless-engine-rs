@@ -172,6 +172,14 @@ The SQL triggers below still need recipe ports (each verified with a live test):
 - [ ] Known latency: login ~2.5s (bcrypt verify on cost-10 hashes + Helix
       round-trips). The app's Sign In button can appear stuck-disabled until
       it resolves. Investigate bcrypt cost / caching if it bothers users.
+- [x] PERF FIX (2026-08-18): the slowness was NOT the blocking-client doc
+      (that's a correctness issue, already fixed). Root cause: the Helix
+      blocking client had pool_max_idle_per_host(0) -> a fresh TCP connection
+      per request. With keep-alive enabled (30s idle), login dropped 6.9s ->
+      0.43s and a 12-query dashboard burst finished in 0.19s wall (was 1-10s
+      per query). Also: realtime poll 15s -> 30s; removed 2 corrupt
+      site_settings nodes (test leftovers) causing "missing field seq" 500s.
+      Browser-verified: dashboard + Learners & Classes load in <1s, 0 errors.
 - [ ] Still stubbed: storage.remove; some RPCs (get_tailor_stats,
       tailor_materials_cost, etc.) return "not yet ported".
 

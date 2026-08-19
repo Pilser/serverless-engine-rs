@@ -473,6 +473,12 @@ fn route_blocking(
         ("POST", ["auth", "login"]) => crate::transport::rest_auth::login(server, board, body),
         ("POST", ["auth", "logout"]) => crate::transport::rest_auth::logout(server, board, body),
         ("POST", ["auth", "role"]) => crate::transport::rest_auth::set_role(server, board, &principal, body),
+        ("GET", ["auth", "oauth", "microsoft", "start"]) => {
+            crate::transport::rest_oauth::microsoft_start(server, board, params)
+        }
+        ("GET", ["auth", "oauth", "microsoft", "callback"]) => {
+            crate::transport::rest_oauth::microsoft_callback(server, board, params)
+        }
         ("GET", ["auth", "me"]) => {
             crate::transport::rest_auth::me(server, board, crate::identity::keys::token(headers).as_deref())
         }

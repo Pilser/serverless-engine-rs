@@ -12,6 +12,7 @@ pub mod import;
 pub mod jobs;
 pub mod migrations;
 pub mod model;
+pub mod oauth;
 pub mod policy;
 pub mod query;
 pub mod realtime;

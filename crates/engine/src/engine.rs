@@ -1,4 +1,4 @@
-use crate::model::{Board, KeyRecord, Principal, Recipe, Record, Secret};
+use crate::model::{Board, Key, KeyRecord, Principal, Recipe, Record, Secret};
 use crate::storage::database::{Database, DatabaseCaps};
 use crate::storage::ir::{scalar_text, Agg, SrvFilter};
 use crate::storage::object_store::ObjectStore;
@@ -641,6 +641,19 @@ impl ServerlessEngine {
         crate::auth::user_login(self.db.as_mut(), board_id, email, password)
     }
 
+    /// Issue a session for an already-verified user (SSO). No password check —
+    /// the caller (OAuth) has verified the identity token.
+    pub fn login_user_by_email(&mut self, board_id: &str, email: &str) -> anyhow::Result<(String, String)> {
+        let key = crate::tables::scoped_key(board_id, &email.to_lowercase());
+        let row = self
+            .db
+            .get(crate::tables::TABLE_USERS, &Key::text(key))?
+            .ok_or_else(|| anyhow::anyhow!("user {email} not found"))?;
+        let user: crate::auth::User = serde_json::from_value(row.data)?;
+        let (token, jwt) = crate::auth::issue_session(self.db.as_mut(), board_id, &user.email, &user.role)?;
+        Ok((token, jwt))
+    }
+
     pub fn list_users(&self, board_id: &str) -> anyhow::Result<Vec<crate::auth::User>> {
         crate::auth::user_list(self.db.as_ref(), board_id)
     }
@@ -665,6 +678,42 @@ impl ServerlessEngine {
         token: &str,
     ) -> anyhow::Result<Option<crate::auth::User>> {
         crate::auth::resolve_session(self.db.as_ref(), board_id, token)
+    }
+
+    /// Look up a user by email (for SSO login).
+    pub fn user_by_email(&self, board_id: &str, email: &str) -> anyhow::Result<Option<crate::auth::User>> {
+        let key = crate::tables::scoped_key(board_id, &email.to_lowercase());
+        Ok(self
+            .db
+            .get(crate::tables::TABLE_USERS, &Key::text(key))?
+            .map(|r| serde_json::from_value(r.data))
+            .transpose()?)
+    }
+
+    /// OAuth state store (per board, in-memory, short-lived).
+    fn oauth_states(&self) -> &std::sync::Mutex<std::collections::HashMap<String, String>> {
+        static STATES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+            std::sync::OnceLock::new();
+        STATES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    pub fn set_oauth_state(&self, board_id: &str, state: &str) -> anyhow::Result<()> {
+        self.oauth_states().lock().unwrap().insert(state.to_string(), board_id.to_string());
+        Ok(())
+    }
+
+    pub fn check_oauth_state(&self, board_id: &str, state: &str) -> bool {
+        self.oauth_states()
+            .lock()
+            .unwrap()
+            .get(state)
+            .map(|b| b == board_id)
+            .unwrap_or(false)
+    }
+
+    /// Microsoft SSO config for a board (from its encrypted secrets).
+    pub fn oauth_config(&self, board_id: &str) -> anyhow::Result<Option<crate::oauth::OAuthConfig>> {
+        crate::oauth::config_from_secrets(self.db.as_ref(), board_id)
     }
 
     pub fn resolve_principal(

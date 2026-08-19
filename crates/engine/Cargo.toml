@@ -16,6 +16,7 @@ aes-gcm = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
 bcrypt = { workspace = true }
+jsonwebtoken = { workspace = true }
 jsonschema = { workspace = true }
 
 [dev-dependencies]

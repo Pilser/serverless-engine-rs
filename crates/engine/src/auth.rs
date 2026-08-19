@@ -345,6 +345,17 @@ pub fn user_login(
     }
     let email = row["email"].as_str().unwrap_or(email).to_string();
     let role = row["role"].as_str().unwrap_or("reader").to_string();
+    issue_session(db, board_id, &email, &role)
+}
+
+/// Create a session (token + JWT) for an already-verified user. Used by both
+/// password login and OAuth (SSO) login.
+pub fn issue_session(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    role: &str,
+) -> anyhow::Result<(String, String)> {
     let now = now_iso();
     let token = uuid::Uuid::new_v4().to_string();
     let session = json!({
@@ -356,7 +367,7 @@ pub fn user_login(
         "created_at": now,
     });
     db.insert(TABLE_SESSIONS, Row::new(Key::text(&token), session))?;
-    let jwt = issue_jwt(board_id, &email, &role);
+    let jwt = issue_jwt(board_id, email, role);
     Ok((token, jwt))
 }
 

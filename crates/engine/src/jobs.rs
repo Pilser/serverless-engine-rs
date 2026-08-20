@@ -67,6 +67,14 @@ pub fn job_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Job>> {
     Ok(out)
 }
 
+pub fn job_get(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<Job>> {
+    let key = job_key(board_id, name);
+    let Some(row) = db.get(TABLE_JOBS, &key)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(row.data)?)
+}
+
 pub fn job_remove(db: &mut dyn Database, board_id: &str, name: &str) -> anyhow::Result<bool> {
     let n = db.delete(
         TABLE_JOBS,

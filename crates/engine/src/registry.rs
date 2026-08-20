@@ -889,6 +889,30 @@ pub fn registry() -> Vec<CommandSpec> {
 
     specs.push(CommandSpec {
         group: "secrets".into(),
+        verb: "show".into(),
+        summary: "Show one secret, including its decrypted value (MCP-only).".into(),
+        description: "Returns a single secret's name, fingerprint and decrypted value. The plaintext is returned ONLY through this MCP tool (for export/app-folder portability); the REST API and secrets.list never reveal it.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Secret name (case-insensitive; stored uppercased).".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "name": "API_KEY", "fingerprint": "abc123", "value": "sk_live_xxx" }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "secrets show b_abc API_KEY".into(),
+            description: "Show the API_KEY secret's value (MCP-only).".into(),
+            response: serde_json::json!({ "ok": true, "name": "API_KEY", "fingerprint": "abc123", "value": "sk_live_xxx" }),
+        }],
+        see_also: vec!["secrets.list".into(), "secrets.set".into()],
+        danger_notes: Some("reveals the plaintext value — MCP tool only; never exposed over REST".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "secrets".into(),
         verb: "delete".into(),
         summary: "Delete a board secret.".into(),
         description: "Removes a named secret so {secret:name} placeholders no longer resolve.".into(),
@@ -1059,6 +1083,29 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "keys".into(),
+        verb: "show".into(),
+        summary: "Show one API key's full metadata.".into(),
+        description: "Returns a single key's record (bucket, role, scope, writer, revoked_at, key_hash, salt). Never the plaintext secret — the engine only stores a salted hash.".into(),
+        positional: vec![
+            ArgSpec { name: "bucket".into(), r#type: ArgType::Name, required: true, help: "The key bucket (its name/identifier).".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "bucket": "waos", "board_id": "b_abc", "role": "admin", "scope": null, "writer": null, "revoked": false, "revoked_at": null, "key_hash": "...", "salt": "..." }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "keys show waos".into(),
+            description: "Show the key record for bucket 'waos'.".into(),
+            response: serde_json::json!({ "ok": true, "bucket": "waos", "board_id": "b_abc", "role": "admin" }),
+        }],
+        see_also: vec!["keys.list".into()],
+        danger_notes: Some("reveals the salted key hash — the raw secret is never stored".into()),
+    });
+
+    specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "list".into(),
         summary: "List automation recipes for a board.".into(),
@@ -1077,6 +1124,30 @@ pub fn registry() -> Vec<CommandSpec> {
         dry_run: false,
         examples: vec![],
         see_also: vec!["recipes.add".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "recipes".into(),
+        verb: "show".into(),
+        summary: "Show one automation recipe's full definition.".into(),
+        description: "Returns a single recipe with its trigger (when), payload filter (match), actions, dedup key and optional trigger-table — the full wiring of an automation.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Recipe name.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "name": "welcome", "enabled": true, "when": "record.created", "match": null, "actions": [], "dedup_on": null, "table": null }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "recipes show b_abc welcome".into(),
+            description: "Show the 'welcome' recipe's full definition.".into(),
+            response: serde_json::json!({ "ok": true, "name": "welcome", "enabled": true, "when": "record.created" }),
+        }],
+        see_also: vec!["recipes.list".into(), "recipes.add".into()],
         danger_notes: None,
     });
 
@@ -1337,6 +1408,27 @@ pub fn registry() -> Vec<CommandSpec> {
 
     specs.push(CommandSpec {
         group: "graph".into(),
+        verb: "schema".into(),
+        summary: "Show a board's graph wiring (links + counts).".into(),
+        description: "Reports the graph wiring the engine tracks: the board's parent/child link (from wb_links) and counts of tables, recipes and jobs on the board.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "board": "b_abc", "links": [], "tables": [], "recipe_count": 0, "job_count": 0 }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "graph schema b_abc".into(),
+            description: "Show the board's graph wiring.".into(),
+            response: serde_json::json!({ "ok": true, "board": "b_abc", "links": [], "tables": ["learners"], "recipe_count": 2, "job_count": 0 }),
+        }],
+        see_also: vec!["graph.link".into(), "graph.sync".into(), "links.list".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "graph".into(),
         verb: "unlink".into(),
         summary: "Drop an edge by its edge id.".into(),
         description: "Removes a specific edge (by the $id returned from graph link or graph search_edges) from the board's tenant graph. Nodes stay intact.".into(),
@@ -1558,6 +1650,48 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "links".into(),
+        verb: "list".into(),
+        summary: "List a board's graph parent/child links.".into(),
+        description: "Returns the parent-child link definitions (from wb_links) that join a child table to a parent table via from_key/parent_key — the engine-declared graph wiring.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "links": [{ "child_table": "learners", "parent_table": "classes", "from_key": "$.class_id", "parent_key": "$.id" }] }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "links list b_abc".into(),
+            description: "List the board's links.".into(),
+            response: serde_json::json!({ "ok": true, "links": [] }),
+        }],
+        see_also: vec!["links.show".into(), "graph.schema".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "links".into(),
+        verb: "show".into(),
+        summary: "Show a board's single parent/child link (full).".into(),
+        description: "Returns the full Link record for the board, including child_board/parent_board and both key paths.".into(),
+        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "child_board": "b_abc", "child_table": "learners", "parent_board": "b_abc", "parent_table": "classes", "from_key": "$.class_id", "parent_key": "$.id" }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "links show b_abc".into(),
+            description: "Show the board's link.".into(),
+            response: serde_json::json!({ "ok": true, "child_board": "b_abc", "child_table": "learners" }),
+        }],
+        see_also: vec!["links.list".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
         group: "jobs".into(),
         verb: "add".into(),
         summary: "Schedule a cron job on a board.".into(),
@@ -1625,6 +1759,30 @@ pub fn registry() -> Vec<CommandSpec> {
         dry_run: false,
         examples: vec![],
         see_also: vec!["jobs.add".into(), "jobs.runs".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "jobs".into(),
+        verb: "show".into(),
+        summary: "Show one cron job's full definition.".into(),
+        description: "Returns a single job including its schedule, action JSON, next/last run times and creation time.".into(),
+        positional: vec![
+            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
+            ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Job name.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "name": "heartbeat", "schedule": "*/30 * * * * *", "action": { "type": "http" }, "next_run_at": "...", "last_run_at": null, "last_status": null, "last_message": null, "created_at": "..." }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "jobs show b_abc heartbeat".into(),
+            description: "Show the 'heartbeat' job's full definition.".into(),
+            response: serde_json::json!({ "ok": true, "name": "heartbeat", "schedule": "*/30 * * * * *" }),
+        }],
+        see_also: vec!["jobs.list".into(), "jobs.add".into(), "jobs.runs".into()],
         danger_notes: None,
     });
 

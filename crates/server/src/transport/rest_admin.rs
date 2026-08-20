@@ -91,8 +91,24 @@ fn list_keys(server: &Server, board: &str, principal: &Principal) -> Response<Bo
     if let Some(resp) = require_admin_ok(server, principal) {
         return resp;
     }
+    // Never reveal key_hash/salt over REST — only identity + role + state.
     match server.engine.lock().unwrap().list_keys(board) {
-        Ok(keys) => ok_json(json!({ "ok": true, "keys": keys })),
+        Ok(keys) => {
+            let safe: Vec<Json> = keys
+                .into_iter()
+                .map(|k| {
+                    json!({
+                        "name": k.bucket,
+                        "role": k.role,
+                        "scope": k.scope,
+                        "writer": k.writer,
+                        "revoked": k.revoked_at.is_some(),
+                        "revoked_at": k.revoked_at,
+                    })
+                })
+                .collect();
+            ok_json(json!({ "ok": true, "keys": safe }))
+        }
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -304,8 +320,15 @@ fn list_secrets(server: &Server, board: &str, principal: &Principal) -> Response
     if let Some(resp) = require_admin_ok(server, principal) {
         return resp;
     }
+    // Never reveal the encrypted blob or plaintext over REST — only metadata.
     match server.engine.lock().unwrap().list_secrets(board) {
-        Ok(secrets) => ok_json(json!({ "ok": true, "secrets": secrets })),
+        Ok(secrets) => {
+            let safe: Vec<Json> = secrets
+                .into_iter()
+                .map(|s| json!({ "name": s.name, "fingerprint": s.fingerprint }))
+                .collect();
+            ok_json(json!({ "ok": true, "secrets": safe }))
+        }
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -529,9 +552,28 @@ fn config(server: &Server, board: &str, principal: &Principal) -> Response<BoxBo
     };
     let rate = app.rate_json.clone().unwrap_or(Json::Null);
     let hooks = engine.list_hooks(board).unwrap_or_default();
-    let keys = engine.list_keys(board).unwrap_or_default();
+    let keys: Vec<Json> = engine
+        .list_keys(board)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|k| {
+            json!({
+                "name": k.bucket,
+                "role": k.role,
+                "scope": k.scope,
+                "writer": k.writer,
+                "revoked": k.revoked_at.is_some(),
+                "revoked_at": k.revoked_at,
+            })
+        })
+        .collect();
     let recipes = engine.list_recipes(board).unwrap_or_default();
-    let secrets = engine.list_secrets(board).unwrap_or_default();
+    let secrets: Vec<Json> = engine
+        .list_secrets(board)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| json!({ "name": s.name, "fingerprint": s.fingerprint }))
+        .collect();
     ok_json(json!({
         "ok": true,
         "app": app,

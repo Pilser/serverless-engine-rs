@@ -17,6 +17,28 @@ pub fn list(
     ok(json!({ "recipes": out }))
 }
 
+pub fn show(
+    engine: &ServerlessEngine,
+    _principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let name = arg_str(arguments, "name")?;
+    let recipe = engine
+        .get_recipe(board, name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("recipe '{name}' not found on board {board}"))?;
+    ok(json!({
+        "name": recipe.name,
+        "enabled": recipe.enabled,
+        "when": recipe.when_json,
+        "match": recipe.match_json,
+        "actions": recipe.actions_json,
+        "dedup_on": recipe.dedup_on,
+        "table": recipe.table,
+    }))
+}
+
 pub fn add(
     engine: &mut ServerlessEngine,
     _principal: &Principal,

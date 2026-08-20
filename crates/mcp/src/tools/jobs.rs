@@ -41,6 +41,29 @@ pub fn list(
     ok(json!({ "jobs": out }))
 }
 
+pub fn show(
+    engine: &ServerlessEngine,
+    _principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let name = arg_str(arguments, "name")?;
+    let job = engine
+        .get_job(board, name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("job '{name}' not found on board {board}"))?;
+    ok(json!({
+        "name": job.name,
+        "schedule": job.schedule,
+        "action": job.action,
+        "next_run_at": job.next_run_at,
+        "last_run_at": job.last_run_at,
+        "last_status": job.last_status,
+        "last_message": job.last_message,
+        "created_at": job.created_at,
+    }))
+}
+
 pub fn remove(
     engine: &mut ServerlessEngine,
     _principal: &Principal,

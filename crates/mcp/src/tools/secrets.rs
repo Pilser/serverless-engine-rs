@@ -29,6 +29,30 @@ pub fn list(
     ok(json!({ "secrets": out }))
 }
 
+pub fn show(
+    engine: &ServerlessEngine,
+    _principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let name = arg_str(arguments, "name")?;
+    let secret = engine
+        .get_secret(board, name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("secret '{name}' not found on board {board}"))?;
+    // MCP-only: reveal the decrypted value so the app folder / export can
+    // capture the real content. The REST API never returns it.
+    let value = engine
+        .secret_value(board, name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("secret '{name}' not found on board {board}"))?;
+    ok(json!({
+        "name": secret.name,
+        "fingerprint": secret.fingerprint,
+        "value": value,
+    }))
+}
+
 pub fn delete(
     engine: &mut ServerlessEngine,
     _principal: &Principal,

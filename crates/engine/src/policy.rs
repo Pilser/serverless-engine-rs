@@ -107,12 +107,21 @@ pub fn link_set(db: &mut dyn Database, child_board: &str, child_table: &str, par
     Ok(())
 }
 
-fn get_link(db: &dyn Database, child_board: &str) -> anyhow::Result<Option<Link>> {
+pub fn get_link(db: &dyn Database, child_board: &str) -> anyhow::Result<Option<Link>> {
     let q = Query { filter: SrvFilter { conds: vec![board_cond(child_board)] }, orders: vec![], limit: 1, offset: 0, ttl: None };
     match db.query(TABLE_LINKS, &q)?.rows.into_iter().next() {
         Some(row) => Ok(Some(serde_json::from_value(row.data)?)),
         None => Ok(None),
     }
+}
+
+pub fn link_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Link>> {
+    let q = Query { filter: SrvFilter { conds: vec![board_cond(board_id)] }, orders: vec![], limit: usize::MAX, offset: 0, ttl: None };
+    let mut out = Vec::new();
+    for row in db.query(TABLE_LINKS, &q)?.rows {
+        out.push(serde_json::from_value(row.data)?);
+    }
+    Ok(out)
 }
 
 pub fn link_clear(db: &mut dyn Database, board_id: &str) -> anyhow::Result<()> {

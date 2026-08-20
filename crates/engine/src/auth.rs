@@ -90,6 +90,14 @@ pub fn list_keys(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<KeyRec
     Ok(out)
 }
 
+pub fn get_key(db: &dyn Database, bucket: &str) -> anyhow::Result<Option<KeyRecord>> {
+    let key = Key::text(bucket);
+    let Some(row) = db.get(TABLE_KEYS, &key)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(row.data)?)
+}
+
 fn find_active_key(db: &dyn Database, board_id: &str, secret: &str) -> anyhow::Result<Option<KeyRecord>> {
     let q = Query {
         filter: SrvFilter {

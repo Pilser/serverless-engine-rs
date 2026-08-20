@@ -117,6 +117,22 @@ pub fn secret_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Secr
     secret_query(db, board_id)
 }
 
+pub fn secret_get(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<Secret>> {
+    let key = Key::text(scoped_key(board_id, &name.to_uppercase()));
+    let Some(row) = db.get(TABLE_APP_SECRETS, &key)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(row.data)?)
+}
+
+pub fn secret_value(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<String>> {
+    let Some(secret) = secret_get(db, board_id, name)? else {
+        return Ok(None);
+    };
+    let pt = decrypt_value(&secret.value_encrypted)?;
+    Ok(Some(String::from_utf8(pt)?))
+}
+
 pub fn secret_remove(db: &mut dyn Database, board_id: &str, name: &str) -> anyhow::Result<()> {
     db.delete(TABLE_APP_SECRETS, &secret_filter(board_id, &name.to_uppercase()))?;
     Ok(())

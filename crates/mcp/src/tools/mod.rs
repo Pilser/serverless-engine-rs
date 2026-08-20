@@ -4,6 +4,7 @@ pub mod files;
 pub mod graph;
 pub mod jobs;
 pub mod keys;
+pub mod links;
 pub mod recipes;
 pub mod records;
 pub mod secrets;
@@ -47,9 +48,12 @@ pub fn run(
         "tables.delete" => tables::delete(engine, principal, arguments),
         "secrets.set" => secrets::set(engine, principal, arguments),
         "secrets.list" => secrets::list(engine, principal, arguments),
+        "secrets.show" => secrets::show(engine, principal, arguments),
         "secrets.delete" => secrets::delete(engine, principal, arguments),
         "recipes.list" => recipes::list(engine, principal, arguments),
+        "recipes.show" => recipes::show(engine, principal, arguments),
         "recipes.add" => recipes::add(engine, principal, arguments),
+        "keys.show" => keys::show(engine, principal, arguments),
         "files.list" => files::list(engine, principal, arguments),
         "files.put" => files::put(engine, principal, arguments),
         "files.get" => files::get(engine, principal, arguments),
@@ -60,8 +64,12 @@ pub fn run(
         "graph.traverse" => graph::traverse(engine, principal, arguments),
         "graph.sync" => graph::sync(engine, principal, arguments),
         "graph.search_edges" => graph::search_edges(engine, principal, arguments),
+        "graph.schema" => links::schema(engine, principal, arguments),
+        "links.list" => links::list(engine, principal, arguments),
+        "links.show" => links::show(engine, principal, arguments),
         "jobs.add" => jobs::add(engine, principal, arguments),
         "jobs.list" => jobs::list(engine, principal, arguments),
+        "jobs.show" => jobs::show(engine, principal, arguments),
         "jobs.remove" => jobs::remove(engine, principal, arguments),
         "jobs.runs" => jobs::runs(engine, principal, arguments),
         other => Err(format!("tool '{other}' not implemented yet")),

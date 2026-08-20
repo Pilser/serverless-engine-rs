@@ -608,6 +608,10 @@ impl ServerlessEngine {
         crate::auth::list_keys(self.db.as_ref(), board_id)
     }
 
+    pub fn get_key(&self, bucket: &str) -> anyhow::Result<Option<KeyRecord>> {
+        crate::auth::get_key(self.db.as_ref(), bucket)
+    }
+
     pub fn revoke_key(&mut self, bucket: &str) -> anyhow::Result<()> {
         crate::auth::revoke_key(self.db.as_mut(), bucket)
     }
@@ -735,6 +739,10 @@ impl ServerlessEngine {
         crate::automation::recipe_list(self.db.as_ref(), board_id)
     }
 
+    pub fn get_recipe(&self, board_id: &str, name: &str) -> anyhow::Result<Option<Recipe>> {
+        crate::automation::recipe_get(self.db.as_ref(), board_id, name)
+    }
+
     pub fn remove_recipe(&mut self, board_id: &str, name: &str) -> anyhow::Result<()> {
         crate::automation::recipe_remove(self.db.as_mut(), board_id, name)
     }
@@ -751,6 +759,14 @@ impl ServerlessEngine {
 
     pub fn list_secrets(&self, board_id: &str) -> anyhow::Result<Vec<Secret>> {
         crate::secrets::secret_list(self.db.as_ref(), board_id)
+    }
+
+    pub fn get_secret(&self, board_id: &str, name: &str) -> anyhow::Result<Option<Secret>> {
+        crate::secrets::secret_get(self.db.as_ref(), board_id, name)
+    }
+
+    pub fn secret_value(&self, board_id: &str, name: &str) -> anyhow::Result<Option<String>> {
+        crate::secrets::secret_value(self.db.as_ref(), board_id, name)
     }
 
     pub fn secrets_map(&self, board_id: &str) -> anyhow::Result<std::collections::HashMap<String, String>> {
@@ -783,6 +799,14 @@ impl ServerlessEngine {
 
     pub fn set_link(&mut self, board_id: &str, child_table: &str, parent: &str, parent_table: &str, from_key: &str, parent_key: &str) -> anyhow::Result<()> {
         crate::policy::link_set(self.db.as_mut(), board_id, child_table, parent, parent_table, from_key, parent_key)
+    }
+
+    pub fn list_links(&self, board_id: &str) -> anyhow::Result<Vec<crate::model::Link>> {
+        crate::policy::link_list(self.db.as_ref(), board_id)
+    }
+
+    pub fn get_link(&self, board_id: &str) -> anyhow::Result<Option<crate::model::Link>> {
+        crate::policy::get_link(self.db.as_ref(), board_id)
     }
 
     pub fn clear_link(&mut self, board_id: &str) -> anyhow::Result<()> {
@@ -917,6 +941,10 @@ impl ServerlessEngine {
 
     pub fn list_jobs(&self, board_id: &str) -> anyhow::Result<Vec<crate::model::Job>> {
         crate::jobs::job_list(self.db.as_ref(), board_id)
+    }
+
+    pub fn get_job(&self, board_id: &str, name: &str) -> anyhow::Result<Option<crate::model::Job>> {
+        crate::jobs::job_get(self.db.as_ref(), board_id, name)
     }
 
     pub fn remove_job(&mut self, board_id: &str, name: &str) -> anyhow::Result<bool> {

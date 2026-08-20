@@ -125,6 +125,14 @@ pub fn recipe_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Reci
     Ok(out)
 }
 
+pub fn recipe_get(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<Recipe>> {
+    let key = Key::text(scoped_key(board_id, name));
+    let Some(row) = db.get(TABLE_RECIPES, &key)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(row.data)?)
+}
+
 pub fn recipe_remove(db: &mut dyn Database, board_id: &str, name: &str) -> anyhow::Result<()> {
     if db.delete(TABLE_RECIPES, &recipe_filter(board_id, name))? == 0 {
         anyhow::bail!("recipe '{name}' not found on board {board_id}");

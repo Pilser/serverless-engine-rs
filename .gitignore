@@ -20,6 +20,10 @@
 !docs/
 !docs/**
 
+
+!MCP USAGE GUIDE.md
+
+
 # Allow project tools (migration toolkit + HelixDB reference submodule)
 !tools/
 !tools/**
@@ -75,3 +79,32 @@ tools/migrate_iico/data/storage/
 
 # stray photos
 zerowrapper/*.jpg
+.azure
+
+# --- Production-folder: track only deploy config + .env; exclude binaries/data ---
+# The host bind-mounts below hold the live srv binary, runtime DB caches and the
+# MinIO object store — none of that should be in git. Only the portable deploy
+# config (compose + Dockerfiles + README + .env) is committed.
+!Production-folder/
+!Production-folder/compose.yml
+!Production-folder/Dockerfile.srv
+!Production-folder/Dockerfile.zw
+!Production-folder/README.md
+!Production-folder/.env.example
+!Production-folder/.env
+
+# Track all .env files repo-wide (live secrets) — explicit request.
+!**/.env
+
+# deploy/ holds large runtime data (DB backups, node_modules, dist) — do NOT
+# track the tree, but the request is to commit every .env file, so un-ignore
+# only the .env files and the minimal parent dirs they need.
+!deploy/
+!deploy/.env
+!deploy/iico/
+# deploy/iico ships its own .git — ignore it so git does NOT treat the dir as a
+# nested repository (which would otherwise be staged as a gitlink).
+deploy/iico/.git/
+deploy/iico/.git/**
+!deploy/iico/.env
+

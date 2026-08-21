@@ -1,0 +1,141 @@
+# Production-folder — one-file deploy for the whole stack
+#
+# Services:
+#   minio   (object store, port 9000/9001)
+#   helixdb (HelixDB storage backend, port 7979)
+#   srv     (serverless engine daemon, port 7070)
+#   zw      (Jerboa AI chat, port 9033)
+#
+# ALL paths below are RELATIVE to this compose file (or env-var-driven with
+# relative defaults), so this folder is fully portable: copy it to any machine
+# with Docker, `docker compose up -d --build`, done.
+#
+# Everything talks container-to-container over the compose network:
+#   srv     -> helixdb:8080   (SRV_HELIX_URL)
+#   helixdb -> minio:9000     (AWS_ENDPOINT)
+#   srv AI  -> zw-jerboa:9090 (AI_BASE_URL board secret)
+#
+# External host dependency (NOT in this compose, must exist on the machine):
+#   - zeroclaw daemon socket + agents -> zw talks to it via SOCKET_DIR/AGENTS_DIR
+#
+# All data + binaries are HOST BIND MOUNTS so updates are just:
+#   replace file(s) -> `docker compose up -d` (no rebuild, no recreate for data).
+
+name: ${COMPOSE_PROJECT_NAME:-serverless-prod}
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: ${MINIO_CONTAINER_NAME:-serverless-minio}
+    # Run as the host user so the host-mounted data dir stays writable.
+    user: "1000:1000"
+    # Override the image entrypoint so we can gate startup on a sane host clock.
+    # On a cold boot the host clock may start years in the past; if MinIO starts
+    # then, it keeps that bad clock and every later AWS-signed request (from
+    # HelixDB) is rejected for clock skew even after NTP corrects the host.
+    # Blocking here makes MinIO always pick up the real time on (re)start.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        FLOOR=1700000000  # Nov 2023 — reject obviously-wrong (pre-sync) clocks
+        while [ "$$(date +%s)" -lt "$$FLOOR" ]; do
+          echo "minio: host clock not synced yet ($$(date)), waiting...";
+          sleep 5;
+        done
+        echo "minio: clock ok ($$(date)), starting"
+        exec /usr/bin/minio server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      # MinIO data is the durable object store (HelixDB's S3 backend) — bind
+      # mount so it survives container recreation. NEVER point this elsewhere.
+      - ./minio/data:/data
+    restart: unless-stopped
+
+  helixdb:
+    image: ghcr.io/helixdb/helixdb:v0.0.4
+    container_name: ${HELIX_CONTAINER_NAME:-serverless-helixdb}
+    # HelixDB image runs as uid 65532 (nonroot); the bind dir is chowned to it.
+    user: "65532:65532"
+    environment:
+      HELIX_HTTP_ADDR: 0.0.0.0:8080
+      HELIX_GRPC_ADDR: 127.0.0.1:8081
+      DB_PATH: db/
+      AWS_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_ALLOW_HTTP: "true"
+      S3_BUCKET: helix-db
+      S3_REGION: us-east-1
+    ports:
+      - "${HELIX_PORT:-7979}:8080"
+    volumes:
+      # HelixDB local SlateDB cache (the durable store is MinIO) — bind mount
+      # so the cache survives recreation too.
+      - ./helix/db:/home/nonroot/db
+    depends_on:
+      - minio
+    restart: unless-stopped
+
+  srv:
+    build:
+      context: .
+      dockerfile: Dockerfile.srv
+    image: serverless-srv:latest
+    container_name: ${SRV_CONTAINER_NAME:-serverless-srv}
+    # Run as the host user so the host-mounted data dir stays writable.
+    user: "1000:1000"
+    ports:
+      - "${SRV_PORT:-7070}:7070"
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SRV_DATA_DIR: /data
+      SRV_HOST: 0.0.0.0
+      # HelixDB on the compose network (container name), not a host gateway —
+      # this also sidesteps host ufw FORWARD DROP rules.
+      SRV_HELIX_URL: http://helixdb:8080
+    volumes:
+      - ./srv/data:/data
+      # The srv binary is a HOST BIND MOUNT so you can swap it without a rebuild:
+      # replace Production-folder/srv/srv, then `docker compose up -d srv`.
+      # (The image still carries a copy for offline/registry use; the mount wins.)
+      - ./srv/srv:/usr/local/bin/srv:ro
+    command: ["daemon", "start", "--db", "/data"]
+    depends_on:
+      - helixdb
+
+  zw:
+    build:
+      context: .
+      dockerfile: Dockerfile.zw
+    image: serverless-zw:latest
+    container_name: ${ZW_CONTAINER_NAME:-serverless-zw}
+    user: "1000:1000"
+    environment:
+      ZEROWRAPPER__ZEROCLAW_SOCKET: ${ZEROWRAPPER__ZEROCLAW_SOCKET}
+      ZEROWRAPPER__DB_PATH: /data/zerowrapper.db
+      ZEROWRAPPER__CACHE_DIR: /data/cache
+      ZEROWRAPPER__MCP_TOKEN: ${ZEROWRAPPER_MCP_TOKEN}
+      ZEROWRAPPER_CH_WEB__BIND: 0.0.0.0:9090
+      ZEROWRAPPER_CH_WEB__AGENT: ${ZEROWRAPPER_CH_WEB__AGENT:-jerboa}
+      TOPCOAT_ASSETS_DIR: /app/bundle
+      AGENTS_DIR: ${AGENTS_DIR}
+    ports:
+      - "${ZW_PORT:-9033}:9090"
+    volumes:
+      # Host mounts that MUST stay mounted (state + identity):
+      #   ./zw/data -> live chat DB + cache (the image copy is just the seed)
+      - ./zw/data:/data
+      #   zeroclaw socket + agent workspaces from the host (external dependency)
+      - ${SOCKET_DIR}:/home/vox/.zeroclaw/data
+      - ${AGENTS_DIR}:/home/vox/.zeroclaw/agents
+    working_dir: /app
+    command: zw
+    restart: unless-stopped

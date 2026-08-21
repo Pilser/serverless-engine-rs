@@ -66,6 +66,26 @@ fn run(args: &[String]) -> anyhow::Result<String> {
     let Some(group) = args.first() else {
         return Ok(registry::help_index(&specs));
     };
+    // CLI-only verbs with host disk I/O: files export/import --dir <path>.
+    // They still talk to the daemon (via the MCP tools) but read/write the
+    // local filesystem for the folder.
+    if group == "files" && args.len() >= 4 {
+        let verb = args.get(1).map(|s| s.as_str()).unwrap_or("");
+        let board = args.get(2).map(|s| s.as_str()).unwrap_or("");
+        let dir = args_flag(&args[3..], "--dir");
+        if let Some(dir) = dir {
+            if verb == "export" || verb == "import" {
+                let slug = args_flag(&args[3..], "--slug");
+                let title = args_flag(&args[3..], "--title");
+                let rt = tokio::runtime::Runtime::new().map_err(|e| anyhow::anyhow!("{e}"))?;
+                let out = match verb {
+                    "export" => rt.block_on(cmd_files_export(&daemon, board, &dir, slug.as_deref()))?,
+                    _ => rt.block_on(cmd_files_import(&daemon, board, &dir, slug.as_deref(), title.as_deref()))?,
+                };
+                return Ok(out);
+            }
+        }
+    }
     if args.get(1).map(|s| s.as_str()) == Some("--help") {
         return Ok(registry::group_help(&specs, group));
     }
@@ -145,6 +165,111 @@ fn cmd_daemon(args: &[String]) -> anyhow::Result<String> {
             other
         )),
     }
+}
+
+/// `srv files export <board> --dir <path> [--slug <name>]` — download a dist
+/// (main or sub-app) from the daemon and write the files to a local folder.
+async fn cmd_files_export(
+    daemon: &str,
+    board: &str,
+    dir: &str,
+    slug: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("board".to_string(), serde_json::json!(board));
+    if let Some(s) = slug {
+        arguments.insert("slug".to_string(), serde_json::json!(s));
+    }
+    let call = client::ToolCall {
+        name: "files.export".to_string(),
+        arguments: serde_json::Value::Object(arguments),
+    };
+    let out = client::call(daemon, &call).await?;
+    let result = out.get("result").cloned().unwrap_or(out.clone());
+    let files = result
+        .get("files")
+        .and_then(|f| f.as_array())
+        .ok_or_else(|| anyhow::anyhow!("export response missing 'files'"))?;
+    use base64::Engine as _;
+    let root = std::path::Path::new(dir);
+    std::fs::create_dir_all(root)?;
+    let mut n = 0usize;
+    for f in files {
+        let path = f
+            .get("path")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| anyhow::anyhow!("file missing 'path'"))?;
+        let b64 = f
+            .get("content_base64")
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| anyhow::anyhow!("file '{path}' missing 'content_base64'"))?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| anyhow::anyhow!("bad base64 for '{path}': {e}"))?;
+        let dest = root.join(path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&dest, &bytes)?;
+        n += 1;
+    }
+    Ok(format!("exported {n} files to {dir}\n"))
+}
+
+/// `srv files import <board> --dir <path> [--slug <name>]` — upload every file
+/// in a local folder to the daemon (main dist or a sub-app), replacing same-path
+/// files.
+async fn cmd_files_import(
+    daemon: &str,
+    board: &str,
+    dir: &str,
+    slug: Option<&str>,
+    title: Option<&str>,
+) -> anyhow::Result<String> {
+    use base64::Engine as _;
+    let root = std::path::Path::new(dir);
+    if !root.is_dir() {
+        anyhow::bail!("--dir must be an existing directory: {dir}");
+    }
+    let mut files: Vec<serde_json::Value> = Vec::new();
+    fn walk(p: &std::path::Path, root: &std::path::Path, out: &mut Vec<serde_json::Value>) -> anyhow::Result<()> {
+        for e in std::fs::read_dir(p)? {
+            let e = e?;
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path, root, out)?;
+            } else if path.is_file() {
+                let rel = path
+                    .strip_prefix(root)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let bytes = std::fs::read(&path)?;
+                out.push(serde_json::json!({
+                    "path": rel,
+                    "content_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                }));
+            }
+        }
+        Ok(())
+    }
+    walk(root, root, &mut files)?;
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("board".to_string(), serde_json::json!(board));
+    arguments.insert("files".to_string(), serde_json::Value::Array(files));
+    if let Some(s) = slug {
+        arguments.insert("slug".to_string(), serde_json::json!(s));
+    }
+    if let Some(t) = title {
+        arguments.insert("title".to_string(), serde_json::json!(t));
+    }
+    let call = client::ToolCall {
+        name: "files.import".to_string(),
+        arguments: serde_json::Value::Object(arguments),
+    };
+    let out = client::call(daemon, &call).await?;
+    let result = out.get("result").cloned().unwrap_or(out.clone());
+    let imported = result.get("imported").and_then(|i| i.as_u64()).unwrap_or(0);
+    Ok(format!("imported {imported} files from {dir}\n"))
 }
 
 fn backend_impl(

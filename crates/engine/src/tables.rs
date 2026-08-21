@@ -10,6 +10,7 @@ pub const TABLE_APP_SECRETS: &str = "wb_app_secrets";
 pub const TABLE_HOOKS: &str = "wb_hooks";
 pub const TABLE_HOOK_DELIVERIES: &str = "wb_hook_deliveries";
 pub const TABLE_LINKS: &str = "wb_links";
+pub const TABLE_SUBAPPS: &str = "wb_subapps";
 pub const TABLE_AUDIT: &str = "wb_audit";
 pub const TABLE_JOBS: &str = "app_jobs";
 pub const TABLE_JOB_RUNS: &str = "wb_job_runs";

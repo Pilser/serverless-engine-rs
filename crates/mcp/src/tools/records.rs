@@ -42,6 +42,33 @@ pub fn import_records(
     ok(report)
 }
 
+pub fn bulk(
+    engine: &mut ServerlessEngine,
+    principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let board = arg_str(arguments, "board")?;
+    let table = arg_str(arguments, "table")?;
+    let records = arguments
+        .get("records")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .ok_or_else(|| "missing 'records' array".to_string())?;
+    let upsert = arguments.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
+    let migrate = arguments.get("migrate").and_then(|m| m.as_bool()).unwrap_or(false);
+    let writer = principal.writer.clone();
+    let seqs = if migrate {
+        engine
+            .bulk_import(&board, &table, records.clone(), writer.as_deref(), principal)
+            .map_err(|e| e.to_string())?
+    } else {
+        engine
+            .bulk_insert(&board, &table, records.clone(), writer.as_deref(), upsert, principal)
+            .map_err(|e| e.to_string())?
+    };
+    ok(json!({ "seqs": seqs, "migrate": migrate }))
+}
+
 pub fn get(
     engine: &ServerlessEngine,
     _principal: &Principal,
@@ -66,8 +93,12 @@ pub fn list(
     let table = arg_str(arguments, "table")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
+    let dir = arguments.get("dir").and_then(|d| d.as_str()).unwrap_or("desc").to_string();
+    if !matches!(dir.as_str(), "asc" | "desc") {
+        return Err("dir must be one of: asc | desc".into());
+    }
     let records = engine
-        .list_records(&board, &table, limit, None, offset)
+        .list_records(&board, &table, limit, None, offset, &dir)
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()

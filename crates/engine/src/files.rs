@@ -1,9 +1,9 @@
-use crate::model::Principal;
-use crate::storage::database::{Database, Query};
+use crate::model::{Key, Principal, SubApp};
+use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
 use crate::storage::object_store::{KeyInfo, ObjectStore};
-use crate::tables::TABLE_RECORDS;
-use serde_json::Value as Json;
+use crate::tables::{scoped_key, TABLE_RECORDS, TABLE_SUBAPPS};
+use serde_json::{json, Value as Json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn file_id() -> String {
@@ -30,8 +30,14 @@ pub fn file_upload(
     content_type: &str,
     bytes: &[u8],
     meta: &Json,
+    folder: Option<&str>,
 ) -> anyhow::Result<i64> {
-    let key = format!("{board_id}/files/{}.bin", file_id());
+    // Optional subfolder for organization: {board}/files/{folder}/f_<id>.bin.
+    // Without a folder (the default), uploads stay flat: {board}/files/f_<id>.bin.
+    let key = match folder {
+        Some(f) if !f.is_empty() => format!("{board_id}/files/{}/f_{}.bin", f, file_id()),
+        _ => format!("{board_id}/files/f_{}.bin", file_id()),
+    };
     store.put(&key, bytes)?;
     let mut payload = serde_json::json!({
         "file": key,
@@ -206,10 +212,93 @@ pub fn asset_delete(store: &dyn ObjectStore, board_id: &str, rel: &str) -> anyho
     Ok(true)
 }
 
+/// Delete every asset under a relative prefix (e.g. a sub-app slug) and
+/// return how many files were removed.
+pub fn asset_delete_prefix(store: &dyn ObjectStore, board_id: &str, prefix: &str) -> anyhow::Result<usize> {
+    let p = sanitize_asset_path(prefix)?;
+    let full_prefix = format!("{}{}/", asset_prefix(board_id), p);
+    let keys = store.list(&full_prefix)?;
+    let mut n = 0usize;
+    for k in keys {
+        store.delete(&k.key)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 pub fn asset_list(store: &dyn ObjectStore, board_id: &str) -> anyhow::Result<Vec<KeyInfo>> {
     Ok(store
         .list(&asset_prefix(board_id))?
         .into_iter()
         .map(|k| KeyInfo { key: k.key.trim_start_matches(&asset_prefix(board_id)).to_string(), size: k.size })
         .collect())
+}
+
+// ---- sub-apps (named dist folders under a board's asset namespace) -------
+
+pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
+    let slug = slug.trim_matches('/');
+    if slug.is_empty() || slug.contains('/') || slug == "." || slug == ".." {
+        anyhow::bail!("slug must be a single path segment (no '/', '.', '..')");
+    }
+    Ok(())
+}
+
+pub fn subapp_put(
+    db: &mut dyn Database,
+    board_id: &str,
+    slug: &str,
+    title: Option<&str>,
+    index: Option<&str>,
+) -> anyhow::Result<()> {
+    validate_slug(slug)?;
+    let sub = SubApp {
+        board_id: board_id.to_string(),
+        slug: slug.to_string(),
+        title: title.map(String::from),
+        index: index
+            .map(String::from)
+            .unwrap_or_else(|| format!("{slug}/index.html")),
+        created_at: crate::crud::now_str(),
+    };
+    let mut data = serde_json::to_value(&sub)?;
+    data["board_id"] = json!(board_id);
+    db.insert(TABLE_SUBAPPS, Row::new(Key::text(scoped_key(board_id, slug)), data))?;
+    Ok(())
+}
+
+pub fn subapp_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<SubApp>> {
+    let q = Query {
+        filter: SrvFilter { conds: vec![FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: json!(board_id) }] },
+        orders: vec![("$.slug".to_string(), false)],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    let mut out = Vec::new();
+    for row in db.query(TABLE_SUBAPPS, &q)?.rows {
+        out.push(serde_json::from_value(row.data)?);
+    }
+    Ok(out)
+}
+
+pub fn subapp_get(db: &dyn Database, board_id: &str, slug: &str) -> anyhow::Result<Option<SubApp>> {
+    let key = Key::text(scoped_key(board_id, slug));
+    let Some(row) = db.get(TABLE_SUBAPPS, &key)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(row.data)?)
+}
+
+pub fn subapp_remove(db: &mut dyn Database, board_id: &str, slug: &str) -> anyhow::Result<bool> {
+    let n = db.delete(
+        TABLE_SUBAPPS,
+        &SrvFilter {
+            conds: vec![
+                FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: json!(board_id) },
+                FilterCond { field: "$.slug".to_string(), op: Op::Eq, value: json!(slug) },
+            ],
+        },
+    )?;
+    Ok(n > 0)
 }

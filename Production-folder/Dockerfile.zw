@@ -1,0 +1,22 @@
+# Zerowrapper (Jerboa AI chat) — production image
+# Build:  docker build -f Dockerfile.zw -t zw-prod .
+# Run:    part of compose.yml (service: zw)
+#
+# NOTE: this image carries the binary + asset bundle + a COPY of the chat DB.
+# At runtime compose mounts the LIVE ./zw/data over /data (host mount), the
+# zeroclaw socket + agents dirs from the host, so state stays outside the image.
+
+FROM debian:bookworm-slim
+
+# zw needs the zeroclaw socket + agent workspaces; ca-certs for HTTPS calls.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY zw/zw /usr/local/bin/zw
+COPY zw/assets /app/bundle
+RUN chmod +x /usr/local/bin/zw
+
+WORKDIR /app
+VOLUME ["/data"]
+EXPOSE 9090
+
+ENTRYPOINT ["/usr/local/bin/zw"]

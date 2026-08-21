@@ -609,6 +609,7 @@ pub fn record_list(
     limit: usize,
     before: Option<i64>,
     offset: usize,
+    dir: &str,
 ) -> anyhow::Result<Vec<Record>> {
     let cfg = load_table(db, board_id, table)?;
     let limit = limit.clamp(1, 200);
@@ -626,7 +627,11 @@ pub fn record_list(
         }
         recs.push(rec);
     }
-    recs.sort_by(|a, b| b.seq.cmp(&a.seq));
+    if dir == "asc" {
+        recs.sort_by(|a, b| a.seq.cmp(&b.seq));
+    } else {
+        recs.sort_by(|a, b| b.seq.cmp(&a.seq));
+    }
     let start = offset.min(recs.len());
     let end = (start + limit).min(recs.len());
     let mut out = Vec::new();

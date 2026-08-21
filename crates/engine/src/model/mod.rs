@@ -162,6 +162,21 @@ pub struct Link {
     pub parent_key: String,
 }
 
+/// A named sub-app (standalone dist folder) hosted under a board's asset
+/// namespace. `index` is the relative asset path of its root html (default
+/// "{slug}/index.html").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubApp {
+    pub board_id: String,
+    pub slug: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub index: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Principal {
     pub id: String,

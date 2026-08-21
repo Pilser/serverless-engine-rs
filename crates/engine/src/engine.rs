@@ -116,7 +116,7 @@ impl ServerlessEngine {
         board: &str,
         table: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        let records = self.list_records(board, table, 1000, None, 0)?;
+        let records = self.list_records(board, table, 1000, None, 0, "desc")?;
         let mut created: Vec<serde_json::Value> = Vec::new();
         let mut skipped = 0usize;
         // Memoize (target_table, ref_value) -> target node id so repeated refs
@@ -466,8 +466,9 @@ impl ServerlessEngine {
         limit: usize,
         before: Option<i64>,
         offset: usize,
+        dir: &str,
     ) -> anyhow::Result<Vec<Record>> {
-        crate::crud::record_list(self.db.as_ref(), board_id, table, limit, before, offset)
+        crate::crud::record_list(self.db.as_ref(), board_id, table, limit, before, offset, dir)
     }
 
     pub fn count_records(&self, board_id: &str, table: &str) -> anyhow::Result<i64> {
@@ -809,6 +810,30 @@ impl ServerlessEngine {
         crate::policy::get_link(self.db.as_ref(), board_id)
     }
 
+    // ---- sub-apps --------------------------------------------------------
+
+    pub fn put_subapp(
+        &mut self,
+        board_id: &str,
+        slug: &str,
+        title: Option<&str>,
+        index: Option<&str>,
+    ) -> anyhow::Result<()> {
+        crate::files::subapp_put(self.db.as_mut(), board_id, slug, title, index)
+    }
+
+    pub fn list_subapps(&self, board_id: &str) -> anyhow::Result<Vec<crate::model::SubApp>> {
+        crate::files::subapp_list(self.db.as_ref(), board_id)
+    }
+
+    pub fn get_subapp(&self, board_id: &str, slug: &str) -> anyhow::Result<Option<crate::model::SubApp>> {
+        crate::files::subapp_get(self.db.as_ref(), board_id, slug)
+    }
+
+    pub fn remove_subapp(&mut self, board_id: &str, slug: &str) -> anyhow::Result<bool> {
+        crate::files::subapp_remove(self.db.as_mut(), board_id, slug)
+    }
+
     pub fn clear_link(&mut self, board_id: &str) -> anyhow::Result<()> {
         crate::policy::link_clear(self.db.as_mut(), board_id)
     }
@@ -868,8 +893,9 @@ impl ServerlessEngine {
         content_type: &str,
         bytes: &[u8],
         meta: &Json,
+        folder: Option<&str>,
     ) -> anyhow::Result<i64> {
-        let seq = crate::files::file_upload(self.db.as_mut(), self.store.as_ref(), board_id, table, filename, content_type, bytes, meta)?;
+        let seq = crate::files::file_upload(self.db.as_mut(), self.store.as_ref(), board_id, table, filename, content_type, bytes, meta, folder)?;
         self.emit(board_id, "created", seq, meta.clone());
         Ok(seq)
     }
@@ -898,6 +924,10 @@ impl ServerlessEngine {
 
     pub fn delete_asset(&self, board_id: &str, rel: &str) -> anyhow::Result<bool> {
         crate::files::asset_delete(self.store.as_ref(), board_id, rel)
+    }
+
+    pub fn delete_asset_prefix(&self, board_id: &str, prefix: &str) -> anyhow::Result<usize> {
+        crate::files::asset_delete_prefix(self.store.as_ref(), board_id, prefix)
     }
 
     pub fn list_assets(&self, board_id: &str) -> anyhow::Result<Vec<crate::storage::object_store::KeyInfo>> {

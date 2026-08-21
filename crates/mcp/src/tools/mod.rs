@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod auth;
+pub mod endpoints;
 pub mod files;
 pub mod graph;
 pub mod jobs;
@@ -8,6 +9,7 @@ pub mod links;
 pub mod recipes;
 pub mod records;
 pub mod secrets;
+pub mod subapps;
 pub mod tables;
 pub mod users;
 
@@ -29,6 +31,7 @@ pub fn run(
         "apps.delete" => apps::delete(engine, principal, arguments),
         "apps.update" => apps::update(engine, principal, arguments),
         "apps.resources" => apps::resources(engine, principal, arguments),
+        "endpoints.list" => endpoints::list(engine, principal, arguments),
         "auth.signup" => auth::signup(engine, principal, arguments),
         "auth.login" => auth::login(engine, principal, arguments),
         "auth.me" => auth::me(engine, principal, arguments),
@@ -43,8 +46,10 @@ pub fn run(
         "records.aggregate" => records::aggregate(engine, principal, arguments),
         "records.delete" => records::delete(engine, principal, arguments),
         "records.import" => records::import_records(engine, principal, arguments),
+        "records.bulk" => records::bulk(engine, principal, arguments),
         "tables.create" => tables::create(engine, principal, arguments),
         "tables.list" => tables::list(engine, principal, arguments),
+        "tables.show" => tables::show(engine, principal, arguments),
         "tables.delete" => tables::delete(engine, principal, arguments),
         "secrets.set" => secrets::set(engine, principal, arguments),
         "secrets.list" => secrets::list(engine, principal, arguments),
@@ -57,6 +62,9 @@ pub fn run(
         "files.list" => files::list(engine, principal, arguments),
         "files.put" => files::put(engine, principal, arguments),
         "files.get" => files::get(engine, principal, arguments),
+        "files.export" => files::export(engine, principal, arguments),
+        "files.import" => files::import(engine, principal, arguments),
+        "files.upload" => files::upload(engine, principal, arguments),
         "files.delete" => files::delete(engine, principal, arguments),
         "graph.link" => graph::link(engine, principal, arguments),
         "graph.unlink" => graph::unlink(engine, principal, arguments),
@@ -67,6 +75,8 @@ pub fn run(
         "graph.schema" => links::schema(engine, principal, arguments),
         "links.list" => links::list(engine, principal, arguments),
         "links.show" => links::show(engine, principal, arguments),
+        "subapps.list" => subapps::list(engine, principal, arguments),
+        "subapps.remove" => subapps::remove(engine, principal, arguments),
         "jobs.add" => jobs::add(engine, principal, arguments),
         "jobs.list" => jobs::list(engine, principal, arguments),
         "jobs.show" => jobs::show(engine, principal, arguments),

@@ -352,10 +352,28 @@ fn static_site(
         return Some(err_json(StatusCode::FORBIDDEN, "private board"));
     }
     let engine = server.engine.lock().unwrap();
+    let mut base = format!("/srv/{board}/");
     let mut target = rel.to_string();
-    if rel.is_empty() {
-        target = "index.html".to_string();
+    let mut fallback = "index.html".to_string();
+
+    // Sub-app (slug) routing: if the first path segment names a registered
+    // sub-app, serve from its prefix with a per-slug base and per-slug SPA
+    // fallback so deep links inside the sub-app land on ITS index.html.
+    let first_seg = rel.split('/').next().unwrap_or("");
+    if !first_seg.is_empty() {
+        if let Ok(Some(sub)) = engine.get_subapp(board, first_seg) {
+            base = format!("/srv/{board}/{}/", sub.slug);
+            fallback = sub.index.clone();
+            target = match rel.strip_prefix(&sub.slug) {
+                Some(rest) if !rest.is_empty() => format!("{}{}", sub.slug, rest),
+                _ => sub.index.clone(),
+            };
+        }
     }
+    if target.is_empty() {
+        target = fallback.clone();
+    }
+
     let mut fetched = engine.get_asset(board, &target).ok().flatten().or_else(|| {
         if !target.ends_with(".html") {
             engine.get_asset(board, &format!("{target}/index.html")).ok().flatten()
@@ -364,20 +382,19 @@ fn static_site(
         }
     });
     // SPA fallback: an unknown path with no file extension (a client-side route)
-    // serves index.html so React Router can handle it.
+    // serves the sub-app's index.html (or the root index.html for the main dist).
     if fetched.is_none() && !has_file_ext(&target) {
-        fetched = engine.get_asset(board, "index.html").ok().flatten();
+        fetched = engine.get_asset(board, &fallback).ok().flatten();
     }
     let Some((mut data, content_type)) = fetched else {
         return Some(err_json(StatusCode::NOT_FOUND, "not found"));
     };
-    // Deep-link refreshes (e.g. /srv/<board>/director/letters) serve the root
-    // index.html, but its relative "./assets/..." paths would then resolve
-    // against the deep-link directory and 404. Anchor relative URLs to the
-    // board root so every asset loads regardless of route depth.
+    // Deep-link refreshes serve the html, but its relative "./assets/..." paths
+    // would resolve against the deep-link directory and 404. Anchor relative
+    // URLs to the app root (board root or slug root) so assets always load.
     if content_type.starts_with("text/html") {
-        let base = format!("<base href=\"/srv/{board}/\">");
-        data = inject_base_tag(&data, &base).into_bytes();
+        let tag = format!("<base href=\"{base}\">");
+        data = inject_base_tag(&data, &tag).into_bytes();
     }
     let body = Full::new(Bytes::from(data))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
@@ -712,9 +729,10 @@ fn upload(
         .unwrap_or("upload")
         .to_string();
     let meta = json!({ "name": filename, "type": content_type });
+    let folder = params.get("folder").map(|s| s.as_str());
     let uploaded = {
         let mut engine = server.engine.lock().unwrap();
-        engine.upload(board, &table, &filename, &content_type, body, &meta)
+        engine.upload(board, &table, &filename, &content_type, body, &meta, folder)
     };
     match uploaded {
         Ok(seq) => ok_json(json!({ "ok": true, "seq": seq, "table": table })),

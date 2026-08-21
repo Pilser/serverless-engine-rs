@@ -1,0 +1,24 @@
+# Serverless engine daemon (srv) — production image
+# Build:  docker build -f Dockerfile.srv -t srv-prod .
+# Run:    part of compose.yml (service: srv)
+#
+# Debian base with a NEW enough glibc: the srv binary is dynamically linked and
+# needs GLIBC_2.38/2.39 (bookworm=2.36 is too old; trixie ships 2.41).
+
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+
+COPY srv/srv /usr/local/bin/srv
+RUN chmod +x /usr/local/bin/srv
+
+# NOTE: at runtime compose bind-mounts ./srv/srv over /usr/local/bin/srv (ro),
+# so binary updates are just: replace the file + `docker compose up -d` (no
+# rebuild). The COPY here is only the image fallback for registry use.
+
+# Daemon data is a HOST mount (./srv/data -> /data) so it survives rebuilds.
+VOLUME ["/data"]
+EXPOSE 7070
+
+ENTRYPOINT ["/usr/local/bin/srv"]
+CMD ["daemon", "start", "--db", "/data"]

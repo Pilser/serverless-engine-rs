@@ -228,7 +228,8 @@ pub fn list_records(
     let limit: usize = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(50).clamp(1, 200);
     let offset: usize = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
     let before: Option<i64> = params.get("before").and_then(|b| b.parse().ok());
-    match server.engine.lock().unwrap().list_records(board, table, limit, before, offset) {
+    let dir = params.get("dir").map(|d| d.as_str()).unwrap_or("desc").to_string();
+    match server.engine.lock().unwrap().list_records(board, table, limit, before, offset, &dir) {
         Ok(rs) => ok_json(json!({ "ok": true, "records": records_json(&rs) })),
         Err(e) => table_err(table, e),
     }
